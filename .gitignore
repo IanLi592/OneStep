@@ -1,0 +1,30 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock        # 可选：应用项目通常提交，此处先忽略便于多端；发布前可改为提交
+.metadata
+
+# 由 flutter create 生成的各平台目录（我们只保留定制过的部分）
+# 注意：android/ windows/ 目录需要保留定制，故不整体忽略，仅忽略构建产物
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 本地工具链（Flutter SDK / Android SDK / JDK，勿入库）
+.tooling/
+.diag/
+
+# 本地数据与备份
+*.db
+*.db-journal
+*.sqlite
+backups/
+
+# 系统
+Thumbs.db
+.DS_Store

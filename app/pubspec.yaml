@@ -1,0 +1,44 @@
+name: onestep
+description: "跬步 Onestep —— 简洁的间隔重复闪记卡应用（Android + Windows）。"
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # 状态管理
+  flutter_riverpod: ^2.6.1
+
+  # 本地存储（SQLite）
+  drift: ^2.26.0
+  sqlite3_flutter_libs: ^0.5.28
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  # 导入导出
+  csv: ^6.0.0
+  # APKG 是 zip 包；archive 用于解压读取
+  archive: ^3.6.1
+
+  # 同步客户端 HTTP
+  http: ^1.2.2
+
+  # APKG 导入需读取其中的 SQLite
+  sqlite3: ^2.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  drift_dev: ^2.26.0
+  build_runner: ^2.4.13
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

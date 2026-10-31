@@ -1,0 +1,131 @@
+# CI：一键构建 Windows 桌面 exe 与 Android APK。
+#
+# 为什么用 CI 打 Windows 包：
+#   开发机（本机）无管理员权限、无 VS C++ 工具链、无法开启开发者模式（符号链接被拒），
+#   故无法本地构建 Windows exe。GitHub 的 windows-latest 预装 MSVC + CMake + Ninja
+#   且已开启开发者模式，可直接产出 exe。这是"解决本机打不了包"的可复现方案。
+#
+# 用法：
+#   1) 推送到 GitHub（main/master 分支），或在 Actions 页点 "Run workflow" 手动触发。
+#   2) 构建完成后，到该次运行的 Artifacts 下载：
+#        onestep-windows-<版本>.zip   → 解压即得 onestep.exe（连同所需 DLL）
+#        onestep-android-<版本>.apk
+#
+# 产物说明：
+#   Windows 的 "Release" 目录含 onestep.exe + flutter_windows.dll 等多个文件，
+#   故打包成 zip 分发；解压后双击 onestep.exe 即可运行，无需安装。
+
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  # 先跑测试作为质量闸门，测试不过就不打包。
+  test:
+    name: 测试（服务端 + Flutter）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 同步服务端测试
+        run: node test/store.test.js
+        working-directory: server
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+        working-directory: app
+
+      - name: flutter test
+        run: flutter test
+        working-directory: app
+
+  windows:
+    name: Windows 桌面 exe
+    runs-on: windows-latest
+    needs: test   # 测试通过才打包
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 读取版本号
+        id: ver
+        shell: bash
+        run: echo "version=$(grep '^version:' app/pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: flutter pub get
+        run: flutter pub get
+        working-directory: app
+
+      - name: 构建 Windows exe（release）
+        run: flutter build windows --release
+        working-directory: app
+
+      - name: 打包 Release 目录为 zip
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          Compress-Archive -Path 'app\build\windows\runner\Release\*' `
+            -DestinationPath "onestep-windows-$v.zip" -Force
+          Write-Output "打包完成：onestep-windows-$v.zip"
+
+      - name: 上传 exe 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: onestep-windows-${{ steps.ver.outputs.version }}
+          path: onestep-windows-*.zip
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 配置 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 读取版本号
+        id: ver
+        run: echo "version=$(grep '^version:' app/pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: flutter pub get
+        run: flutter pub get
+        working-directory: app
+
+      - name: 构建 release APK
+        run: flutter build apk --release
+        working-directory: app
+
+      - name: 重命名 APK 带版本号
+        run: mv app/build/app/outputs/flutter-apk/app-release.apk onestep-android-${{ steps.ver.outputs.version }}.apk
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: onestep-android-${{ steps.ver.outputs.version }}
+          path: onestep-android-*.apk
+          if-no-files-found: error

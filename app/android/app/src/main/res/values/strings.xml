@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">跬步</string>
+    <string name="widget_description">显示今日待复习的卡片数量，点按打开跬步开始学习。</string>
+</resources>

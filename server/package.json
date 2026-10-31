@@ -1,0 +1,15 @@
+{
+  "name": "onestep-sync-server",
+  "version": "0.1.0",
+  "description": "跬步/Onestep 自建同步服务端（MVP）：账号 + 设备配对 + 基于版本号的差异同步。",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
