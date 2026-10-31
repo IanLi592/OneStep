@@ -2,7 +2,10 @@ name: onestep
 description: "跬步 Onestep —— 简洁的间隔重复闪记卡应用（Android + Windows）。"
 publish_to: 'none'
 
-version: 0.1.0+1
+# 版本号格式: 主版本.次版本.修订-日期+构建号
+# versionName=0.1.0-20261031(系统设置里可见、含日期可区分新旧包)
+# versionCode=20261031(构建号,Android 要求单调递增,日期天然满足)
+version: 0.1.0-20261031+20261031
 
 environment:
   sdk: ^3.13.7
@@ -32,6 +35,9 @@ dependencies:
 
   # APKG 导入需读取其中的 SQLite
   sqlite3: ^2.4.0
+
+  # 读取应用版本号（设置页显示）
+  package_info_plus: ^8.3.0
 
 dev_dependencies:
   flutter_test:

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/domain/providers.dart';
 import '../sync/sync_screen.dart';
@@ -17,6 +18,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late int _maxReviews;
   late double _retention;
   bool _initialized = false;
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() => _version = 'v${info.version}+${info.buildNumber}');
+      }
+    } catch (_) {
+      // 读取失败则不显示版本号，不影响功能。
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -119,8 +138,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           const SizedBox(height: 24),
           Center(
-            child: Text('跬步 Onestep · 本地优先，数据在你手中',
-                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13)),
+            child: Text(
+              _version.isEmpty
+                  ? '跬步 Onestep · 本地优先，数据在你手中'
+                  : '跬步 Onestep $_version\n本地优先，数据在你手中',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+            ),
           ),
         ],
       ),
