@@ -268,7 +268,11 @@ class CollectionRepo {
     return q.where((c) => c.reps > 0 && c.lastReview >= sinceMs && c.lastReview > 0).length;
   }
 
-  /// 某牌组今日统计（新/学习/到期）。
+  /// 某牌组今日统计（新/学习/到期）+ 总数/已学（供界面进度条与徽标）。
+  ///
+  /// - [total]（getter）: 今日待处理（新 + 到期学习/复习），即"待学习"数。
+  /// - [totalCards]: 牌组内卡片总数（Y）。
+  /// - [studiedCards]: 已学过（非新卡）数量（X），用于"已学X/Y"与进度条。
   Future<DeckCounts> deckCounts(String deckId, {DateTime? now}) async {
     final nowMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
     final all = await (db.select(db.cards)
@@ -284,7 +288,13 @@ class CollectionRepo {
         if (c.due <= nowMs) review++;
       }
     }
-    return DeckCounts(newCards: newCount, learning: learning, review: review);
+    return DeckCounts(
+      newCards: newCount,
+      learning: learning,
+      review: review,
+      totalCards: all.length,
+      studiedCards: all.length - newCount, // 非新卡即已学过
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -413,14 +423,31 @@ class CollectionRepo {
   }
 }
 
-/// 牌组今日计数。
+/// 牌组今日计数 + 总数/已学。
 class DeckCounts {
-  const DeckCounts({required this.newCards, required this.learning, required this.review});
+  const DeckCounts({
+    required this.newCards,
+    required this.learning,
+    required this.review,
+    this.totalCards = 0,
+    this.studiedCards = 0,
+  });
+
   final int newCards;
   final int learning;
   final int review;
 
+  /// 牌组内卡片总数（进度条分母）。
+  final int totalCards;
+
+  /// 已学过（非新卡）数量（进度条分子）。
+  final int studiedCards;
+
+  /// 今日待处理（新 + 到期学习/复习）。
   int get total => newCards + learning + review;
+
+  /// 学习进度 0.0~1.0。
+  double get progress => totalCards == 0 ? 0 : studiedCards / totalCards;
 }
 
 /// JSON 字符串转义（避免手写引号问题）。
