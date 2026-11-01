@@ -31,7 +31,21 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('跬步'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('跬步'),
+            Text(
+              '积跬步，至千里',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w400,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: '浏览卡片',
