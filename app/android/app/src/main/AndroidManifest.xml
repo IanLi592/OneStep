@@ -1,4 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 同步客户端需要访问局域网内的自建同步服务端。
+         注意:此权限必须声明在 main manifest。flutter create 的模板只把 INTERNET
+         写进 debug/ 与 profile/,导致 release 包没有联网权限,socket connect()
+         直接返回 EPERM(errno=1 Operation not permitted)。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"
