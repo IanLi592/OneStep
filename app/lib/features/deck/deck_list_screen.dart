@@ -1,7 +1,9 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/providers.dart';
+import '../../core/domain/xlsx_import_service.dart';
 import '../browser/browser_screen.dart';
 import '../card_edit/add_card_sheet.dart';
 import '../review/review_screen.dart';
@@ -49,6 +51,11 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const SettingsScreen()),
             ),
+          ),
+          IconButton(
+            tooltip: '导入 Excel',
+            icon: const Icon(Icons.upload_file_outlined),
+            onPressed: () => _importXlsx(context),
           ),
           IconButton(
             tooltip: '新增分组',
@@ -156,6 +163,68 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('创建失败：$e')),
+        );
+      }
+    }
+  }
+
+  /// 导入 Excel(.xlsx):选文件 -> 解析 -> 按牌组建卡 -> 反馈。
+  Future<void> _importXlsx(BuildContext context) async {
+    // 1) 选文件(仅 xlsx)。file_picker 13.x:返回 List<PlatformFile>。
+    List<PlatformFile> picked;
+    try {
+      picked = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx'],
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('打开文件选择器失败:$e')),
+        );
+      }
+      return;
+    }
+    if (picked.isEmpty) return; // 用户取消
+    final file = picked.first;
+
+    try {
+      // 2) 读字节。13.x:用 readAsBytes()(不再有 withData 参数)。
+      final bytes = await file.readAsBytes();
+
+      // 3) 导入。
+      final repo = ref.read(repoProvider);
+      final result = await XlsxImportService(repo).importBytes(bytes);
+
+      if (result.cardsCreated == 0) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未从文件中解析到可导入的卡片')),
+          );
+        }
+        return;
+      }
+
+      // 4) 刷新列表与桌面小组件。
+      ref.invalidate(decksProvider);
+      _pushWidget();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '导入完成:${result.cardsCreated} 张卡片,'
+              '${result.decksCreated} 个新分组'
+              '${result.decksReused > 0 ? ',${result.decksReused} 个已有分组' : ''}',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入失败:$e')),
         );
       }
     }

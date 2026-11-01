@@ -38,7 +38,10 @@ dependencies:
   sqlite3: ^2.4.0
 
   # 读取应用版本号（设置页显示）
-  package_info_plus: ^8.3.0
+  package_info_plus: ^10.2.2
+  xml: ^7.1.0
+  # 文件选择(导入 Excel)。13.x 支持 AGP9 Built-in Kotlin,修复旧版编译失败。
+  file_picker: ^13.3.0
 
 dev_dependencies:
   flutter_test:
