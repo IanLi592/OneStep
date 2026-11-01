@@ -31,6 +31,13 @@ if (Test-Path $vswhere) {
 }
 
 Set-Location $app
+
+# 每次构建前更新版本号:Android/应用宝按 versionCode 判断是否"更新",
+# 版本号不变可能触发平台缓存/优化,导致新包看起来"没更新"。
+Write-Output '=== 更新版本号 ==='
+& (Join-Path $PSScriptRoot 'set-version.ps1')
+if ($LASTEXITCODE -ne 0) { throw '更新版本号失败' }
+
 Write-Output '=== flutter pub get ==='
 flutter pub get
 if ($LASTEXITCODE -ne 0) { throw 'pub get 失败' }

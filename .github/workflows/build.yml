@@ -61,6 +61,12 @@ jobs:
           channel: stable
           cache: true
 
+      - name: 更新版本号（每次构建唯一）
+        # Android/应用宝按 versionCode 判断是否"更新";版本号不变可能触发
+        # 平台缓存/优化,导致新包看起来"没更新"。故每次构建前生成唯一版本。
+        shell: pwsh
+        run: ./scripts/set-version.ps1
+
       - name: 读取版本号
         id: ver
         shell: bash
@@ -109,6 +115,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: 更新版本号（每次构建唯一）
+        # 同 Windows:每次构建生成唯一 versionCode,避免平台按旧版本缓存。
+        shell: pwsh
+        run: ./scripts/set-version.ps1
 
       - name: 读取版本号
         id: ver
