@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../fsrs/fsrs.dart';
@@ -88,6 +90,26 @@ class CollectionRepo {
     return (db.select(db.decks)..where((t) => t.id.equals(deck.id.value))).getSingle();
   }
 
+  /// 重命名牌组。
+  Future<void> renameDeck(String deckId, String newName) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (db.update(db.decks)..where((t) => t.id.equals(deckId))).write(
+      DecksCompanion(name: Value(newName), version: Value(now)),
+    );
+  }
+
+  /// 删除牌组(软删除)：牌组 + 其下所有卡片一并标记删除。
+  ///
+  /// 卡片级联删除,保证牌组删掉后不再出现在浏览/统计里;
+  /// 笔记保留(软删除不物理清除,便于同步传播与误删恢复)。
+  Future<void> deleteDeck(String deckId) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (db.update(db.decks)..where((t) => t.id.equals(deckId)))
+        .write(DecksCompanion(deleted: const Value(true), version: Value(now)));
+    await (db.update(db.cards)..where((c) => c.deckId.equals(deckId)))
+        .write(CardsCompanion(deleted: const Value(true), version: Value(now)));
+  }
+
   // ---------------------------------------------------------------------------
   // 笔记与卡片
   // ---------------------------------------------------------------------------
@@ -141,6 +163,40 @@ class CollectionRepo {
       await _createCard(noteId: noteId, deckId: deckId, templateIndex: i);
     }
     return (db.select(db.notes)..where((t) => t.id.equals(noteId))).getSingle();
+  }
+
+  /// 编辑卡片内容:更新其笔记的字段与标签。
+  ///
+  /// [fields] 为该笔记的字段数组(基本=2项,完形填空=1项);
+  /// [tags] 若非 null 则覆盖标签。
+  Future<void> updateNoteContent({
+    required String noteId,
+    required List<String> fields,
+    List<String>? tags,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final encoded = jsonEncode(fields);
+    await (db.update(db.notes)..where((t) => t.id.equals(noteId))).write(
+      NotesCompanion(
+        fields: Value(encoded),
+        tags: tags != null ? Value(tags.join(' ')) : const Value.absent(),
+        version: Value(now),
+      ),
+    );
+  }
+
+  /// 移动卡片到另一牌组(改卡片所属分组)。
+  Future<void> moveCard({required String cardId, required String toDeckId}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (db.update(db.cards)..where((c) => c.id.equals(cardId)))
+        .write(CardsCompanion(deckId: Value(toDeckId), version: Value(now)));
+  }
+
+  /// 删除单张卡片(软删除)。
+  Future<void> deleteCard(String cardId) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (db.update(db.cards)..where((c) => c.id.equals(cardId)))
+        .write(CardsCompanion(deleted: const Value(true), version: Value(now)));
   }
 
   /// 取（或创建）完形填空笔记类型。

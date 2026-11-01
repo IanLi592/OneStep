@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:onestep/core/data/database.dart';
+import 'package:onestep/core/domain/browser_service.dart';
 import 'package:onestep/core/domain/collection_repo.dart';
 
 /// 集成测试：用内存数据库跑通"建卡 → 复习队列 → 四档作答 → 撤销"闭环，
@@ -227,5 +228,73 @@ void main() {
     expect(repo2.newCardsPerDay, 55);
     expect(repo2.maxReviewsPerDay, 123);
     expect(repo2.desiredRetention, closeTo(0.85, 0.001));
+  });
+
+  // ---------------------------------------------------------------------------
+  // 增删改查(分组 + 卡片)
+  // ---------------------------------------------------------------------------
+
+  test('renameDeck 重命名分组', () async {
+    final deck = await repo.createDeck('旧名字');
+    await repo.renameDeck(deck.id, '新名字');
+    final decks = await repo.allDecks();
+    final updated = decks.firstWhere((d) => d.id == deck.id);
+    expect(updated.name, '新名字');
+  });
+
+  test('deleteDeck 软删除分组及其卡片', () async {
+    final deck = await repo.createDeck('待删分组');
+    await repo.createBasicNote(deckId: deck.id, front: 'q1', back: 'a1');
+    final before = await repo.deckCounts(deck.id);
+    expect(before.totalCards, 1);
+
+    await repo.deleteDeck(deck.id);
+
+    // 分组不再出现在列表。
+    final decks = await repo.allDecks();
+    expect(decks.any((d) => d.id == deck.id), isFalse);
+    // 卡片也被级联删除(计数为0)。
+    final after = await repo.deckCounts(deck.id);
+    expect(after.totalCards, 0);
+  });
+
+  test('updateNoteContent 编辑正面/背面与标签', () async {
+    final deck = (await repo.allDecks()).first;
+    final note = await repo.createBasicNote(deckId: deck.id, front: '旧正面', back: '旧背面');
+    await repo.updateNoteContent(
+      noteId: note.id,
+      fields: ['新正面', '新背面'],
+      tags: ['alpha', 'beta'],
+    );
+    final items = await BrowserService(db).search(const CardQuery());
+    final updated = items.firstWhere((i) => i.note.id == note.id);
+    expect(updated.displayFront, '新正面');
+    expect(updated.displayBack, '新背面');
+    expect(updated.note.tags, 'alpha beta');
+  });
+
+  test('moveCard 移动卡片到另一分组', () async {
+    final d1 = await repo.createDeck('分组A');
+    final d2 = await repo.createDeck('分组B');
+    final note = await repo.createBasicNote(deckId: d1.id, front: 'mq', back: 'ma');
+    final card = (await (db.select(db.cards)..where((c) => c.noteId.equals(note.id))).getSingle());
+
+    await repo.moveCard(cardId: card.id, toDeckId: d2.id);
+
+    final aCounts = await repo.deckCounts(d1.id);
+    final bCounts = await repo.deckCounts(d2.id);
+    expect(aCounts.totalCards, 0);
+    expect(bCounts.totalCards, 1);
+  });
+
+  test('deleteCard 软删除单卡', () async {
+    final deck = (await repo.allDecks()).first;
+    final note = await repo.createBasicNote(deckId: deck.id, front: 'del', back: 'x');
+    final card = (await (db.select(db.cards)..where((c) => c.noteId.equals(note.id))).getSingle());
+    expect((await repo.deckCounts(deck.id)).totalCards, greaterThan(0));
+
+    await repo.deleteCard(card.id);
+
+    expect((await repo.deckCounts(deck.id)).totalCards, 0);
   });
 }
