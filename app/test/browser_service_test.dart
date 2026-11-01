@@ -90,4 +90,19 @@ void main() {
     expect(items.length, 1);
     expect(items.first.displayFront, '水在0度沸腾');
   });
+
+  test('displayBack 取第二个字段,单字段时回退', () async {
+    final deck = (await repo.allDecks()).first;
+    await repo.createBasicNote(deckId: deck.id, front: 'hola', back: '你好');
+    final items = await browser.search(const CardQuery());
+    expect(items.first.displayBack, '你好');
+    expect(items.first.displayFront, 'hola');
+  });
+
+  test('displayBack 对 cloze 返回完整原文', () async {
+    final deck = (await repo.allDecks()).first;
+    await repo.createClozeNote(deckId: deck.id, text: '水在{{c1::0}}度沸腾');
+    final items = await browser.search(const CardQuery());
+    expect(items.first.displayBack, '水在0度沸腾');
+  });
 }

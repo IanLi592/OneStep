@@ -10,6 +10,7 @@ import '../card_edit/add_card_sheet.dart';
 import '../review/review_screen.dart';
 import '../settings/settings_screen.dart';
 import '../stats/stats_screen.dart';
+import 'deck_detail_screen.dart';
 
 /// 首页：牌组列表，每个牌组显示今日"新/学习/到期"数量，一步进入学习。
 class DeckListScreen extends ConsumerStatefulWidget {
@@ -372,7 +373,7 @@ class _DeckCard extends ConsumerWidget {
         borderRadius: BorderRadius.circular(16),
         onTap: () {
           Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => ReviewScreen(deckId: deckId, deckName: deckName),
+            builder: (_) => DeckDetailScreen(deckId: deckId, deckName: deckName),
           ));
         },
         child: Padding(

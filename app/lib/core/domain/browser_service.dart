@@ -128,7 +128,19 @@ class BrowseItem {
   String get displayFront {
     final fields = _decode(note.fields);
     if (fields.isEmpty) return '';
-    return fields.first.replaceAllMapped(
+    return _stripCloze(fields.first);
+  }
+
+  /// 展示用的背面文本（第二个字段；完形填空则为完整原文）。
+  String get displayBack {
+    final fields = _decode(note.fields);
+    if (fields.length < 2) return _stripCloze(fields.isEmpty ? '' : fields.first);
+    return _stripCloze(fields[1]);
+  }
+
+  /// 去掉 cloze 标记，显示完整内容。
+  String _stripCloze(String s) {
+    return s.replaceAllMapped(
       RegExp(r'\{\{c\d+::([^{}]*?)\}\}'),
       (Match m) {
         final body = m.group(1)!;
