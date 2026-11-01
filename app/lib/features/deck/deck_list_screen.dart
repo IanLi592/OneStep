@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/data/database.dart' show Deck;
 import '../../core/domain/providers.dart';
 import '../../core/domain/xlsx_import_service.dart';
+import '../../shared/quote_carousel.dart';
 import '../browser/browser_screen.dart';
 import '../card_edit/add_card_sheet.dart';
 import '../review/review_screen.dart';
@@ -89,6 +90,8 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
         children: [
           // 顶部概览:待学大数字 + 已学 + 去学习按钮。
           _buildSummary(context, ref),
+          // 励志标语轮播(淡入淡出自动切换)。
+          const QuoteCarousel(),
           Expanded(
             child: decksAsync.when(
               loading: () => const Center(child: CircularProgressIndicator()),
