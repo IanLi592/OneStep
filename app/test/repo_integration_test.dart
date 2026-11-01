@@ -26,6 +26,31 @@ void main() {
     expect(decks.first.name, '默认牌组');
   });
 
+  test('createDeck 新增分组', () async {
+    final before = await repo.allDecks();
+    final deck = await repo.createDeck('英语单词');
+    expect(deck.name, '英语单词');
+    final after = await repo.allDecks();
+    expect(after.length, before.length + 1);
+    expect(after.any((d) => d.name == '英语单词'), isTrue);
+  });
+
+  test('createDeck 支持同名分组共存', () async {
+    await repo.createDeck('重复分组');
+    await repo.createDeck('重复分组');
+    final decks = await repo.allDecks();
+    expect(decks.where((d) => d.name == '重复分组').length, 2);
+  });
+
+  test('createDeck 建的分组可正常建卡与复习', () async {
+    final deck = await repo.createDeck('测试组');
+    await repo.createBasicNote(deckId: deck.id, front: 'q', back: 'a');
+    final counts = await repo.deckCounts(deck.id);
+    expect(counts.newCards, 1);
+    final due = await repo.dueCards(deck.id);
+    expect(due, hasLength(1));
+  });
+
   test('createBasicNote 生成笔记与一张新卡', () async {
     final deck = (await repo.allDecks()).first;
     await repo.createBasicNote(deckId: deck.id, front: 'hola', back: '你好');

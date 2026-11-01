@@ -51,6 +51,11 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
             ),
           ),
           IconButton(
+            tooltip: '新增分组',
+            icon: const Icon(Icons.create_new_folder_outlined),
+            onPressed: () => _showCreateDeckDialog(context),
+          ),
+          IconButton(
             tooltip: '添加卡片',
             icon: const Icon(Icons.add),
             onPressed: () => _openAddCard(context),
@@ -102,6 +107,58 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
   void _pushWidget() {
     // 异步推送，失败不影响主流程。
     ref.read(widgetUpdaterProvider).push();
+  }
+
+  /// 新增分组：弹窗输入名称，创建后刷新列表。
+  Future<void> _showCreateDeckDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    final repo = ref.read(repoProvider);
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('新增分组'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '分组名称',
+            hintText: '例如：英语单词',
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('创建'),
+          ),
+        ],
+      ),
+    );
+
+    if (name == null || name.isEmpty) return;
+
+    try {
+      await repo.createDeck(name);
+      // 刷新牌组列表与桌面小组件。
+      ref.invalidate(decksProvider);
+      _pushWidget();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已创建分组「$name」'), duration: const Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('创建失败：$e')),
+        );
+      }
+    }
   }
 }
 
