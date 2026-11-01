@@ -1,4 +1,4 @@
-﻿# 本地构建 Windows 桌面 exe（需先装一次 VS Build Tools）。
+# 本地构建 Windows 桌面 exe（需先装一次 VS Build Tools）。
 #
 # 前置（每台机器只需做一次，需管理员）：
 #   1) 安装 "Visual Studio 2022 Build Tools"，勾选工作负载：
@@ -36,7 +36,9 @@ flutter pub get
 if ($LASTEXITCODE -ne 0) { throw 'pub get 失败' }
 
 Write-Output '=== flutter build windows --release ==='
-flutter build windows --release
+# --no-tree-shake-icons: 图标子集化会误剪部分图标字形(如 create_new_folder_outlined),
+# 导致图标空白;关掉它保证所有图标完整(字体约 +1.6MB)。
+flutter build windows --release --no-tree-shake-icons
 if ($LASTEXITCODE -ne 0) { throw '构建失败（确认开发者模式已开启、MSVC 已装）' }
 
 $out = Join-Path $app 'build\windows\runner\Release'

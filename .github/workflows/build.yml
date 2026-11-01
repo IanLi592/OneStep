@@ -71,7 +71,9 @@ jobs:
         working-directory: app
 
       - name: 构建 Windows exe（release）
-        run: flutter build windows --release
+        # --no-tree-shake-icons: 图标子集化会误剪部分图标字形（如 create_new_folder_outlined），
+        # 导致图标空白；关掉它保证所有图标完整（字体约 +1.6MB）。
+        run: flutter build windows --release --no-tree-shake-icons
         working-directory: app
 
       - name: 打包 Release 目录为 zip
@@ -117,7 +119,8 @@ jobs:
         working-directory: app
 
       - name: 构建 release APK
-        run: flutter build apk --release
+        # 同 Windows:关掉图标子集化,避免误剪图标字形导致图标空白。
+        run: flutter build apk --release --no-tree-shake-icons
         working-directory: app
 
       - name: 重命名 APK 带版本号
