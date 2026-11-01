@@ -270,10 +270,12 @@ class ApkgImporter {
   }
 
   Future<Deck> _ensureDeck(String name) async {
+    // 用 .get() 而非 getSingleOrNull():牌组名可重复(同名分组可共存),
+    // 多行时 getSingleOrNull 会抛 "Too many elements"。取第一个匹配即可。
     final existing = await (repo.db.select(repo.db.decks)
           ..where((t) => t.deleted.equals(false) & t.name.equals(name)))
-        .getSingleOrNull();
-    if (existing != null) return existing;
+        .get();
+    if (existing.isNotEmpty) return existing.first;
     return repo.createDeck(name);
   }
 }

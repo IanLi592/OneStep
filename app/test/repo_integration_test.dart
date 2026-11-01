@@ -26,6 +26,25 @@ void main() {
     expect(decks.first.name, '默认牌组');
   });
 
+  test('多分组/多笔记类型时 seedDefaults 不崩(回归:getSingleOrNull 多行崩溃)', () async {
+    // 模拟导入 Excel 后的库:多个分组 + 多个笔记类型。
+    await repo.createDeck('大模型');
+    await repo.createDeck('英语');
+    await repo.createClozeNote(deckId: (await repo.allDecks()).first.id, text: 'c{{c1::x}}');
+
+    // 再次 seedDefaults 应安全跳过(不抛 "Too many elements")。
+    await db.seedDefaults();
+
+    final decks = await repo.allDecks();
+    expect(decks.length, greaterThanOrEqualTo(3)); // 默认 + 大模型 + 英语
+
+    // 多笔记类型时,建基本卡片也不崩。
+    final deck = decks.first;
+    await repo.createBasicNote(deckId: deck.id, front: 'q', back: 'a');
+    final counts = await repo.deckCounts(deck.id);
+    expect(counts.newCards, greaterThan(0));
+  });
+
   test('createDeck 新增分组', () async {
     final before = await repo.allDecks();
     final deck = await repo.createDeck('英语单词');

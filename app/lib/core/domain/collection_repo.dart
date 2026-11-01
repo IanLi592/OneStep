@@ -145,10 +145,11 @@ class CollectionRepo {
 
   /// 取（或创建）完形填空笔记类型。
   Future<NoteType> _clozeNoteType() async {
-    final existing = await (db.select(db.noteTypes)
+    // 用 .get() 而非 getSingleOrNull(),避免多行时抛 "Too many elements"。
+    final clozeTypes = await (db.select(db.noteTypes)
           ..where((t) => t.deleted.equals(false) & t.isCloze.equals(true)))
-        .getSingleOrNull();
-    if (existing != null) return existing;
+        .get();
+    if (clozeTypes.isNotEmpty) return clozeTypes.first;
     final now = DateTime.now().millisecondsSinceEpoch;
     final id = newId();
     await db.into(db.noteTypes).insert(NoteTypesCompanion.insert(
@@ -179,9 +180,21 @@ class CollectionRepo {
     ));
   }
 
+  /// 取默认笔记类型(用于"基本"卡片)。
+  ///
+  /// 必须用 `.get()` 而非 `.getSingle()`:笔记类型可能有多个(基本 + 完形填空),
+  /// `.getSingle()` 在多行时会抛 "Too many elements" 导致建卡崩溃。
+  /// 优先取非完形填空的类型,否则取第一个。
   Future<NoteType> _defaultNoteType() async {
-    final t = await (db.select(db.noteTypes)..where((x) => x.deleted.equals(false))).getSingle();
-    return t;
+    final types =
+        await (db.select(db.noteTypes)..where((x) => x.deleted.equals(false))).get();
+    if (types.isEmpty) {
+      throw StateError('没有可用的笔记类型(应由 seedDefaults 创建)');
+    }
+    for (final t in types) {
+      if (!t.isCloze) return t;
+    }
+    return types.first;
   }
 
   // ---------------------------------------------------------------------------

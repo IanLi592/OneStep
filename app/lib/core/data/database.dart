@@ -22,10 +22,14 @@ class OnestepDb extends _$OnestepDb {
   int get schemaVersion => 1;
 
   /// 在应用启动时调用：创建默认牌组与默认笔记类型。
+  ///
+  /// 注意:必须用 `.get()` + `isEmpty` 判断,不能用 `getSingleOrNull()`——
+  /// 后者在有多行时会抛 "Too many elements"(如导入 Excel 后存在多个分组),
+  /// 导致启动崩溃。这里只关心"是否已存在",不关心有几行。
   Future<void> seedDefaults() async {
-    final existingDeck =
-        await (select(decks)..where((t) => t.deleted.equals(false))).getSingleOrNull();
-    if (existingDeck == null) {
+    final existingDecks =
+        await (select(decks)..where((t) => t.deleted.equals(false))).get();
+    if (existingDecks.isEmpty) {
       final now = DateTime.now().millisecondsSinceEpoch;
       await into(decks).insert(DecksCompanion.insert(
         id: newId(),
@@ -34,9 +38,9 @@ class OnestepDb extends _$OnestepDb {
         version: now,
       ));
     }
-    final existingType =
-        await (select(noteTypes)..where((t) => t.deleted.equals(false))).getSingleOrNull();
-    if (existingType == null) {
+    final existingTypes =
+        await (select(noteTypes)..where((t) => t.deleted.equals(false))).get();
+    if (existingTypes.isEmpty) {
       final now = DateTime.now().millisecondsSinceEpoch;
       await into(noteTypes).insert(NoteTypesCompanion.insert(
         id: newId(),
