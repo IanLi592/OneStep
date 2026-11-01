@@ -8,6 +8,7 @@ import 'core/data/database.dart';
 import 'core/domain/collection_repo.dart';
 import 'core/domain/providers.dart';
 import 'features/deck/deck_list_screen.dart';
+import 'shared/quote_carousel.dart' show appRouteObserver;
 import 'shared/theme/app_theme.dart';
 
 Future<void> main() async {
@@ -74,6 +75,8 @@ class OnestepApp extends StatelessWidget {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.system,
+      // 注册路由观察器:标语轮播靠它监听"进入/退回首页"切换。
+      navigatorObservers: [appRouteObserver],
       home: const DeckListScreen(),
     );
   }

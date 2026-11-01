@@ -2,14 +2,20 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-/// 首页励志标语轮播:淡入淡出自动切换。
+/// 全局路由观察器:用于监听"进入/退回首页"以切换标语。
+///
+/// 需在 MaterialApp.navigatorObservers 中注册本实例。
+final RouteObserver<ModalRoute<void>> appRouteObserver = RouteObserver<ModalRoute<void>>();
+
+/// 首页励志标语轮播:淡入淡出自动切换(每 5 分钟),
+/// 且每次进入或退回首页时切换下一句。
 ///
 /// 放在待学概览与牌组列表之间,打开即见,不干扰学习流程。
 class QuoteCarousel extends StatefulWidget {
   const QuoteCarousel({
     super.key,
     this.quotes = kQuotes,
-    this.interval = const Duration(seconds: 4),
+    this.interval = const Duration(minutes: 5),
   });
 
   /// 标语列表。
@@ -44,7 +50,7 @@ const List<String> kQuotes = [
   '循梦而行，向阳而生',
 ];
 
-class _QuoteCarouselState extends State<QuoteCarousel> {
+class _QuoteCarouselState extends State<QuoteCarousel> with RouteAware {
   int _index = 0;
   Timer? _timer;
 
@@ -52,17 +58,53 @@ class _QuoteCarouselState extends State<QuoteCarousel> {
   void initState() {
     super.initState();
     if (widget.quotes.length > 1) {
-      _timer = Timer.periodic(widget.interval, (_) {
-        if (!mounted || widget.quotes.isEmpty) return;
-        setState(() => _index = (_index + 1) % widget.quotes.length);
-      });
+      _timer = Timer.periodic(widget.interval, (_) => _advance());
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 订阅路由观察器,监听"进入/退回首页"。
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      appRouteObserver.subscribe(this, route);
     }
   }
 
   @override
   void dispose() {
+    appRouteObserver.unsubscribe(this);
     _timer?.cancel();
     super.dispose();
+  }
+
+  /// 切换到下一句。
+  void _advance() {
+    if (!mounted || widget.quotes.length < 2) return;
+    setState(() => _index = (_index + 1) % widget.quotes.length);
+  }
+
+  // 首页路由被"进入"或"从上层返回"时,切换下一句。
+  @override
+  void didPush() {
+    // 首次进入不切换(显示第一句),避免启动时跳一下。
+  }
+
+  @override
+  void didPopNext() {
+    // 从详情页退回首页 -> 切换。
+    _advance();
+  }
+
+  @override
+  void didPushNext() {
+    // 离开首页(跳到详情) -> 不切换。
+  }
+
+  @override
+  void didPop() {
+    // 本路由被弹出,无需处理。
   }
 
   @override
