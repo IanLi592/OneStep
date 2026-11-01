@@ -115,20 +115,24 @@ class _DeckDetailScreenState extends ConsumerState<DeckDetailScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // 封面头卡。
-          countsAsync.when(
-            loading: () => const SizedBox(height: 160),
-            error: (_, _) => const SizedBox(height: 160),
-            data: (counts) => _header(context, counts, scheme),
-          ),
-          const SizedBox(height: 16),
-          // 筛选标签。
-          _filterTabs(scheme),
-          const SizedBox(height: 12),
-          // 卡片网格。
+      body: Center(
+        // 宽屏(Windows)限宽居中,避免内容横向拉伸、卡片过大。
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1100),
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              // 封面头卡。
+              countsAsync.when(
+                loading: () => const SizedBox(height: 160),
+                error: (_, _) => const SizedBox(height: 160),
+                data: (counts) => _header(context, counts, scheme),
+              ),
+              const SizedBox(height: 16),
+              // 筛选标签。
+              _filterTabs(scheme),
+              const SizedBox(height: 12),
+              // 卡片网格。
           cardsAsync.when(
             loading: () => const Padding(
               padding: EdgeInsets.only(top: 60),
@@ -145,21 +149,31 @@ class _DeckDetailScreenState extends ConsumerState<DeckDetailScreen> {
                   ),
                 );
               }
-              return GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 0.82,
-                ),
-                itemCount: filtered.length,
-                itemBuilder: (_, i) => _cardTile(context, filtered[i], scheme),
+              // 响应式列数:按可用宽度自适应,宽屏(Windows)自动多列、卡片变小。
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final w = constraints.maxWidth;
+                  // 每张卡目标约 300px 宽,列数 2~5,卡片不会被拉大。
+                  final cols = (w / 300).clamp(2, 5).floor();
+                  return GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: cols,
+                      mainAxisSpacing: 12,
+                      crossAxisSpacing: 12,
+                      childAspectRatio: 0.88,
+                    ),
+                    itemCount: filtered.length,
+                    itemBuilder: (_, i) => _cardTile(context, filtered[i], scheme),
+                  );
+                },
               );
             },
           ),
-        ],
+          ],
+        ),
+      ),
       ),
     );
   }

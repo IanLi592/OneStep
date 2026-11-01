@@ -114,16 +114,22 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
                     ),
                   );
                 }
-                return ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: decks.length,
-                  itemBuilder: (context, i) {
-                    final deck = decks[i];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _DeckCard(deckId: deck.id, deckName: deck.name),
-                    );
-                  },
+                return Center(
+                  // 宽屏(Windows)限宽居中,牌组卡片不横向拉伸。
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 900),
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: decks.length,
+                      itemBuilder: (context, i) {
+                        final deck = decks[i];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _DeckCard(deckId: deck.id, deckName: deck.name),
+                        );
+                      },
+                    ),
+                  ),
                 );
               },
             ),
