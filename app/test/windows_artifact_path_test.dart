@@ -41,8 +41,13 @@ void main() {
     });
 
     test('本机若已有构建产物，Release 目录只在 x64 下（核对磁盘而非记忆）', () {
-      final windows = Directory(_resolveRepoPath('app/build/windows'));
-      if (!windows.existsSync()) return; // 干净 clone 没构建过，不因此失败
+      // ⚠️ 这条第一次跑就挂掉了 CI：它原本用"找不到就 fail"的文件定位器，而干净检出
+      // 里根本没有 app/build —— 本机构建过所以从没暴露。产物布局只在"构建过"的机器上
+      // 才谈得上，所以这里必须用可空解析 + 直接跳过，不能当成失败。
+      final located = _resolveRepoPathOrNull('app/build/windows');
+      if (located == null) return;
+      final windows = Directory(located);
+      if (!windows.existsSync()) return;
       final stale = Directory('${windows.path}/runner/Release');
       expect(stale.existsSync(), isFalse,
           reason: '出现 app/build/windows/runner/Release 说明 Flutter 版本的产物布局又变了，'
@@ -76,6 +81,14 @@ void _assertUsesReleasePath(String src, String label, String correct) {
 
 /// 从测试 CWD（`app/`）或仓库根定位文件；找不到就失败——守卫不能静默跳过。
 String _resolveRepoPath(String relativeToRepoRoot) {
+  final hit = _resolveRepoPathOrNull(relativeToRepoRoot);
+  if (hit != null) return hit;
+  fail('无法定位 $relativeToRepoRoot（CWD=${Directory.current.path}）');
+}
+
+/// 同上，但**找不到就返回 null**：给"只有构建过的机器上才成立"的检查用。
+/// 用上面那个会 fail 的版本去探一个可能不存在的目录，干净检出上必红。
+String? _resolveRepoPathOrNull(String relativeToRepoRoot) {
   final candidates = [
     '${Directory.current.path}/../$relativeToRepoRoot',
     '${Directory.current.path}/$relativeToRepoRoot',
@@ -83,7 +96,7 @@ String _resolveRepoPath(String relativeToRepoRoot) {
   for (final p in candidates) {
     if (File(p).existsSync() || Directory(p).existsSync()) return p;
   }
-  fail('无法定位 $relativeToRepoRoot（CWD=${Directory.current.path}）');
+  return null;
 }
 
 String _readRepoFile(String relativeToRepoRoot) =>

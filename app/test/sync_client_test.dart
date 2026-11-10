@@ -17,6 +17,11 @@ void main() {
   const port = 8791;
 
   setUpAll(() async {
+    // 服务端目录一定按**仓库相对位置**解析。这里曾经写死 'D:/projects/Onestep/server'：
+    // 本机全绿，GitHub Actions 的检出路径是 /home/runner/work/OneStep/OneStep，
+    // Process.start 因工作目录不存在直接抛 → setUpAll 与 tearDownAll 双双失败，
+    // 连带本文件 7 条端到端用例一条都没跑（CI 报 "178 passed"，本机是 186）。
+    final serverDir = _findServerDir();
     // 用临时 DB 文件启动 Node 服务端。
     final tmp = Directory.systemTemp.createTempSync('sync_srv');
     final dbPath = '${tmp.path}/sync.json';
@@ -26,7 +31,7 @@ void main() {
     server = await Process.start(
       'node',
       ['src/index.js'],
-      workingDirectory: 'D:/projects/Onestep/server',
+      workingDirectory: serverDir,
       environment: env,
     );
     // 便于诊断：收集服务端输出。
@@ -336,4 +341,18 @@ class _WrappedSocketException extends http.ClientException
 
   @override
   int? get port => null;
+}
+
+/// 从测试 CWD 定位 `server/` 目录（flutter test 的 CWD 是包根 `app/`，
+/// 但也有人从仓库根跑，所以三种基准都试）。
+///
+/// 找不到就 fail —— 端到端测试绝不能因为路径没解析出来就静默变成"没跑"，
+/// 那正是 CI 第一次挂掉时暴露的毛病。
+String _findServerDir() {
+  final cwd = Directory.current.absolute.path;
+  for (final base in [cwd, '$cwd/..', '$cwd/app']) {
+    final dir = Directory('$base/server');
+    if (File('${dir.path}/src/index.js').existsSync()) return dir.absolute.path;
+  }
+  fail('找不到 server/src/index.js（CWD=$cwd）——同步端到端测试无法启动服务端');
 }
