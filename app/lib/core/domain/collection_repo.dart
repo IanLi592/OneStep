@@ -455,6 +455,16 @@ class CollectionRepo {
     final ids = subtreeIds(await liveDecks(), deckId);
 
     // 到期：queue 为 learning/review/relearning 且 due<=now，或新卡 due<=今日上限。
+    //
+    // 排序口径 **queue 优先、due 次之、id 兜底**，三个键缺一不可：
+    //  * `due` 的单位在不同 queue 里不是一回事 —— 新卡固定 `due=0`（见
+    //    createBasicNote），学习/复习卡是毫秒时间戳（见 answerCard）。按 due 全局
+    //    排会把"10 分钟后重学"和"下个月复习"混在一起比大小，队列顺序直接失真，
+    //    所以 queue 必须是主键。
+    //  * 同一 queue 内原来只按 queue 排，等于没排：SQLite 不保证同键行的顺序，
+    //    谁先到期谁先复习的直觉落不了地，所以加 due 升序。
+    //  * 新卡全部 due=0，只到 due 仍是并列 → 顺序不确定，同一批卡两次进入复习可能
+    //    换顺序（用户会觉得"刚才那张明明见过"），再加 id 升序做成全序。
     final due = await (db.select(db.cards)
           ..where((c) =>
               c.deleted.equals(false) &
@@ -462,7 +472,11 @@ class CollectionRepo {
               c.queue.isBiggerOrEqualValue(0) &
               c.due.isBiggerOrEqualValue(0) &
               c.due.isSmallerOrEqualValue(nowMs))
-          ..orderBy([(c) => OrderingTerm(expression: c.queue)]))
+          ..orderBy([
+            (c) => OrderingTerm(expression: c.queue),
+            (c) => OrderingTerm(expression: c.due),
+            (c) => OrderingTerm(expression: c.id),
+          ]))
         .get();
 
     // 新卡今日数量限制

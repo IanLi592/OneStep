@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:onestep/core/data/database.dart';
@@ -398,6 +398,84 @@ void main() {
     due = await repo.dueCards(deck.id);
     // 4 张卡今天都答过 1 次（reps>0），reviewsDoneToday=4 > 上限2 → 复习额度为负 → 无复习卡。
     expect(due.where((c) => c.queue == Queue.review).length, 0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 复习队列排序：queue 主键、due 次键、id 兜底
+  // -------------------------------------------------------------------------
+
+  /// 在独立分组里建 n 张新卡，返回卡片 id（顺序与建卡顺序一致）。
+  Future<(String, List<String>)> deckWithCards(String deckName, int n) async {
+    final deck = await repo.createDeck(deckName);
+    final ids = <String>[];
+    for (var i = 0; i < n; i++) {
+      await repo.createBasicNote(deckId: deck.id, front: '$deckName#$i', back: 'b');
+    }
+    final cards = await (db.select(db.cards)
+          ..where((c) => c.deckId.equals(deck.id))
+          ..orderBy([(c) => OrderingTerm(expression: c.id)]))
+        .get();
+    ids.addAll(cards.map((c) => c.id));
+    return (deck.id, ids);
+  }
+
+  Future<void> setQueueDue(String cardId, int queue, int due) =>
+      (db.update(db.cards)..where((c) => c.id.equals(cardId)))
+          .write(CardsCompanion(queue: Value(queue), due: Value(due)));
+
+  test('同一 queue 内按 due 升序：先到期的先复习', () async {
+    final (deckId, ids) = await deckWithCards('排序组', 3);
+    expect(ids, hasLength(3));
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // 故意乱序写入到期时间：ids[0] 最晚、ids[1] 最早、ids[2] 居中。
+    await setQueueDue(ids[0], Queue.review, nowMs - 1000);
+    await setQueueDue(ids[1], Queue.review, nowMs - 3000);
+    await setQueueDue(ids[2], Queue.review, nowMs - 2000);
+
+    final due = await repo.dueCards(deckId);
+    expect(due.map((c) => c.id).toList(), [ids[1], ids[2], ids[0]],
+        reason: '旧实现只按 queue 排，同一 queue 内等于没排：'
+            'SQLite 不保证同键行的顺序，"先到期先复习"落不了地');
+  });
+
+  test('queue 是主键：due 更小的复习卡不能插到学习卡前面', () async {
+    // due 的单位跨 queue 不可比 —— 新卡固定 0，学习/复习卡是毫秒时间戳。
+    final (deckId, ids) = await deckWithCards('跨队列组', 2);
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await setQueueDue(ids[0], Queue.learning, nowMs - 1000);
+    await setQueueDue(ids[1], Queue.review, nowMs - 5000); // 时间戳更早
+
+    final due = await repo.dueCards(deckId);
+    expect(due.map((c) => c.queue).toList(), [Queue.learning, Queue.review],
+        reason: '改成 due 优先就会把这张"上月复习卡"排到"10 分钟后重学卡"前面，'
+            '队列顺序直接失真');
+    expect(due.map((c) => c.id).toList(), [ids[0], ids[1]]);
+  });
+
+  test('due 全并列时靠 id 兜底：插入顺序不等于 id 顺序也必须按 id 排', () async {
+    // 关键设计：故意**按 id 降序插入**，于是"没排"的结果（SQLite 同键行按扫描序回，
+    // 也就是插入序）与 id 升序不一致 —— 少了 id 这个兜底键，本条就会红。
+    final deck = await repo.createDeck('并列序组');
+    final insertOrder = ['z-3', 'm-2', 'a-1'].map((s) => 'card-$s').toList();
+    for (var i = 0; i < insertOrder.length; i++) {
+      await db.into(db.cards).insert(CardsCompanion.insert(
+            id: insertOrder[i],
+            noteId: 'note-parallel-$i',
+            deckId: deck.id,
+            version: 1,
+          ));
+    }
+    final cards = (await db.select(db.cards).get()).where((c) => c.deckId == deck.id);
+    expect(cards, hasLength(3));
+    expect(cards.every((c) => c.due == 0), isTrue, reason: '前提：新卡 due 固定 0，全靠 id 定序');
+
+    final expected = [...insertOrder]..sort();
+    final first = await repo.dueCards(deck.id);
+    expect(first.map((c) => c.id).toList(), expected,
+        reason: '并列 due 没有兜底键就是按插入顺序回，用户会觉得"刚才那张明明见过"');
+    final second = await repo.dueCards(deck.id);
+    expect(second.map((c) => c.id).toList(), first.map((c) => c.id).toList(),
+        reason: '两次调用顺序必须一致');
   });
 
   test('设置项持久化：saveSettings 后新 repo 能恢复', () async {
