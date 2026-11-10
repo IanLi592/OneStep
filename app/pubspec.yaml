@@ -6,7 +6,7 @@ publish_to: 'none'
 # versionName=0.1.0-20261101(系统设置里可见、含日期可区分新旧包)
 # versionCode=20261101(构建号,Android 要求单调递增,日期天然满足)
 # 注意:每天构建时更新此日期(YYYYMMDD),便于区分装的是哪天的包。
-version: 0.1.0-202611021226+1793593607
+version: 0.1.0-202611101450+1794293423
 
 environment:
   sdk: ^3.13.7
