@@ -21,10 +21,14 @@ class XlsxImportResult {
   /// 本次实际用到的最深层数。
   final int maxDepthReached;
 
-  /// 超过深度上限、导致整批被拒的路径原文（非空时 cardsCreated 必为 0）。
+  /// 超过深度上限、导致整批被拒的路径**原文**（非空时 cardsCreated 必为 0）。
+  ///
+  /// 用源分隔符 `::` 拼接（各段已 trim），因为这条是拿去 xlsx 里搜、改完重导的；
+  /// 与 [importedPaths] 的 ` › ` 展示形式**故意不一样**。
   final List<String> rejectedPaths;
 
   /// 成功导入的完整路径（去重、保序），用于给用户回显"卡到底去哪了"。
+  /// 展示形式，段间是 ` › `；要拿回去文件里对照的字段是 [rejectedPaths]。
   final List<String> importedPaths;
 
   bool get aborted => rejectedPaths.isNotEmpty;
@@ -75,7 +79,9 @@ class XlsxImportService {
     for (final row in rows) {
       final segments = _resolvePath(row, fromFile, fallbackDeckName);
       if (segments.length > kMaxDeckDepth) {
-        final raw = joinDeckPath(segments);
+        // 必须是**源分隔符** `::` 形式，不能用展示串的 ` › `：这条的唯一用途就是
+        // 让用户回到 xlsx 里把那一行找出来改掉。展示格式是 UI 的事，不是数据层的。
+        final raw = joinDeckPath(segments, separator: kDeckPathSeparator);
         if (!rejected.contains(raw)) rejected.add(raw);
         continue;
       }

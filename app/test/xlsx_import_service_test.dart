@@ -144,10 +144,25 @@ void main() {
 
     expect(res.aborted, isTrue);
     expect(res.cardsCreated, 0);
-    expect(res.rejectedPaths, ['A › B › C › D › E › F']);
+    // 必须是**文件里那一格的原文**（源分隔符 ::），不是展示串 —— 用户要拿这条字符串
+    // 回 xlsx 里 Ctrl+F 找到该行改掉。展示形式（›）归 importedPaths 与 UI。
+    expect(res.rejectedPaths, ['A::B::C::D::E::F']);
+    expect(res.rejectedPaths.single, contains('::'));
+    expect(res.rejectedPaths.single, isNot(contains('›')));
     final decks = await repo.allDecks();
     expect(decks.where((d) => d.name == 'A'), isEmpty,
         reason: '中止必须是原子的，不能留下半棵树');
+  });
+
+  test('rejectedPaths 归一到 :: 但不留空白（原文有 padding 时也可搜）', () async {
+    // 文件里写的是 ' A :: B :: C :: D :: E :: F '。splitDeckPath 会 trim 掉每段空白，
+    // 所以回出来的是规范化形式，不是逐字节原文 —— 这一点要写死，别让人以为是 bug。
+    final bytes = buildXlsx([
+      [' A :: B :: C :: D :: E :: F ', 'bad', 'a'],
+    ]);
+    final res = await XlsxImportService(repo).importBytes(bytes);
+    expect(res.aborted, isTrue);
+    expect(res.rejectedPaths, ['A::B::C::D::E::F']);
   });
 
   test('第 5 层是允许的边界', () async {

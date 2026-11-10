@@ -221,7 +221,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('分组最多 $kMaxDeckDepth 层，以下路径超限，本次未导入：\n'
+              content: Text('分组最多 $kMaxDeckDepth 层，以下路径超限，本次未导入'
+                  '（按文件里的 :: 写法原样列出，改完可重导）：\n'
                   '${result.rejectedPaths.take(5).join('\n')}'
                   '${result.rejectedPaths.length > 5 ? '\n…共 ${result.rejectedPaths.length} 条' : ''}'),
               duration: const Duration(seconds: 8),
