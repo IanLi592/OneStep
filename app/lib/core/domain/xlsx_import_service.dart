@@ -139,6 +139,14 @@ class XlsxImportService {
     for (var i = 0; i < rows.length; i++) {
       final row = rows[i];
       final segments = paths[i];
+
+      // 先定内容再建组：正面必填，背面可为空（仍建卡）。
+      // 顺序很要紧——早先是先 ensureChain 再判空，于是"正面背面都空"的行会在树上
+      // 留下一个永远空的空壳分组，用户只看到多出来的组、看不到卡片，以为导入丢东西。
+      final front = row.front.isNotEmpty ? row.front : row.back;
+      final back = row.front.isNotEmpty ? row.back : '';
+      if (front.isEmpty) continue;
+
       final leafDeckId = await ensureChain(segments);
       if (leafDeckId == null) continue;
 
@@ -146,10 +154,6 @@ class XlsxImportService {
       if (!importedPaths.contains(label)) importedPaths.add(label);
       if (segments.length > maxDepth) maxDepth = segments.length;
 
-      // 正面必填;背面可为空(仍建卡)。
-      final front = row.front.isNotEmpty ? row.front : row.back;
-      final back = row.front.isNotEmpty ? row.back : '';
-      if (front.isEmpty) continue;
       await repo.createBasicNote(deckId: leafDeckId, front: front, back: back);
       cardsCreated++;
     }

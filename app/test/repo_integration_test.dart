@@ -118,6 +118,49 @@ void main() {
       expect((await repo.deckCounts(leaf.id)).totalCards, 0);
     });
 
+    test('删除中途失败必须整笔回滚（不留"组已删、卡还活着"）', () async {
+      final root = await repo.createDeck('事务根');
+      await repo.createBasicNote(deckId: root.id, front: 'q', back: 'a');
+      // 用触发器让第二步（cards 的 update）必然失败，等价于"第一条写完就崩"。
+      await db.customStatement('''
+        CREATE TRIGGER fail_cards_update AFTER UPDATE ON cards
+        BEGIN SELECT RAISE(ABORT, 'boom'); END
+      ''');
+
+      await expectLater(repo.deleteDeck(root.id), throwsA(anything));
+
+      final live = await repo.liveDecks();
+      expect(live.map((d) => d.id), contains(root.id),
+          reason: '两条 update 不在同一事务里时，分组已软删而卡片还活着：'
+              '它不属于任何可见分组，既不进聚合计数也删不掉，同步还会推不齐的 tombstone。');
+      // 回滚后卡片也应该仍然可见（deleted=false），事务是整笔撤销不是半笔。
+      final stillAlive = await (db.select(db.cards)
+            ..where((c) => c.deleted.equals(false)))
+          .get();
+      expect(stillAlive, hasLength(1));
+    });
+
+    test('孤儿与真顶层是同一桶：不许长出同名兄弟', () async {
+      // 孤儿 = parentId 指向不存在/已删分组的记录（同步期"子先到、父没到"的产物）。
+      await db.into(db.decks).insert(DecksCompanion.insert(
+          id: 'orphan-1', name: '孤儿顶层', parentId: const Value('查无此组'), version: 1));
+      // 首页/下拉框按 effectiveParent 把它当顶层，重名校验必须同口径。
+      expect((await repo.liveDecks()).map((d) => d.id), contains('orphan-1'));
+
+      await expectLater(repo.createDeck('孤儿顶层'),
+          throwsA(isA<DeckNameConflictException>()),
+          reason: '旧写法比字面 parentId ?? ""，孤儿在"查无此组"桶、新组在""桶，'
+              '顶层就会出现两行一模一样的组');
+
+      // 反向：把孤儿"移到顶层"是一次真实写入（顺手修数据），但桶里已有同名组时报冲突。
+      await db.into(db.decks).insert(DecksCompanion.insert(
+          id: 'top-1', name: '再撞一次', parentId: const Value(null), version: 1));
+      await db.into(db.decks).insert(DecksCompanion.insert(
+          id: 'orphan-2', name: '再撞一次', parentId: const Value('查无此组'), version: 1));
+      await expectLater(repo.moveDeck('orphan-2', null),
+          throwsA(isA<DeckNameConflictException>()));
+    });
+
     test('子树聚合计数：每张卡只算一次', () async {
       final root = await repo.createDeck('聚合根');
       final c1 = await repo.createDeck('子1', parentId: root.id);

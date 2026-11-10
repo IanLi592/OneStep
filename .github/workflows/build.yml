@@ -88,7 +88,10 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ steps.ver.outputs.version }}"
-          Compress-Archive -Path 'app\build\windows\runner\Release\*' `
+          # Flutter 3.4x 的 Windows 产物在 build\windows\x64\runner\Release（多了 x64 一段）。
+          $rel = 'app\build\windows\x64\runner\Release'
+          if (-not (Test-Path $rel)) { throw "找不到 $rel —— 产物路径变了指望 app/test/windows_artifact_path_test.dart 提前拦住" }
+          Compress-Archive -Path "$rel\*" `
             -DestinationPath "onestep-windows-$v.zip" -Force
           Write-Output "打包完成：onestep-windows-$v.zip"
 

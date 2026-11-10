@@ -142,6 +142,24 @@ class CollectionRepo {
   Future<List<DeckNode>> deckTree({DateTime? now}) async =>
       buildTree(await liveDecks(), await _perDeckCounts(now));
 
+  /// 同一**有效父**下、名为 [name] 的既有分组（孤儿按顶层算，与 [effectiveParent] 同口径）。
+  ///
+  /// 新建/重命名/移动三处重名校验必须共用它：早先它们各自比字面
+  /// `parentId ?? ''`，于是"真顶层"和"父已删/还没同步到的孤儿"被当成两桶，
+  /// 顶层能长出两个同名兄弟——首页上就是两行一模一样的组。
+  Deck? _siblingNamed(List<Deck> decks, String? parentId, String name) {
+    final live = liveIds(decks);
+    final key = effectiveParentId(live, parentId);
+    for (final d in decks) {
+      if (d.name == name && effectiveParentId(live, d.parentId) == key) return d;
+    }
+    return null;
+  }
+
+  /// 某分组的**有效**父 id（父已删/不存在则折叠成顶层 null）。
+  String? _effectiveParentOf(List<Deck> decks, Deck d) =>
+      effectiveParentId(liveIds(decks), d.parentId);
+
   /// 新建分组。
   ///
   /// [parentId] 为 null 表示顶层。写入前校验两件事：
@@ -162,11 +180,10 @@ class CollectionRepo {
     }
 
     final parentName = parentId == null ? null : byId(decks, parentId)?.name;
-    for (final d in decks) {
-      if ((d.parentId ?? '') == (parentId ?? '') && d.name == trimmed) {
-        if (reuseOnConflict) return d;
-        throw DeckNameConflictException(trimmed, parentName: parentName);
-      }
+    final clash = _siblingNamed(decks, parentId, trimmed);
+    if (clash != null) {
+      if (reuseOnConflict) return clash;
+      throw DeckNameConflictException(trimmed, parentName: parentName);
     }
 
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -189,15 +206,11 @@ class CollectionRepo {
     final self = byId(decks, deckId);
     if (self == null) return;
 
-    for (final d in decks) {
-      if (d.id != deckId &&
-          (d.parentId ?? '') == (self.parentId ?? '') &&
-          d.name == trimmed) {
-        throw DeckNameConflictException(trimmed,
-            parentName: self.parentId == null
-                ? null
-                : byId(decks, self.parentId!)?.name);
-      }
+    final clash = _siblingNamed(decks, self.parentId, trimmed);
+    if (clash != null && clash.id != deckId) {
+      final pkey = _effectiveParentOf(decks, self);
+      throw DeckNameConflictException(trimmed,
+          parentName: pkey == null ? null : byId(decks, pkey)?.name);
     }
 
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -227,15 +240,16 @@ class CollectionRepo {
       throw DeckDepthException(newParentDepth + subDepth - 1);
     }
 
-    for (final d in decks) {
-      if (d.id != deckId &&
-          (d.parentId ?? '') == (newParentId ?? '') &&
-          d.name == self.name) {
-        throw DeckNameConflictException(self.name,
-            parentName: newParentId == null
-                ? null
-                : byId(decks, newParentId)?.name);
-      }
+    // 目标父下不能重名（按有效父算，孤儿与真顶层是同一桶）。
+    // 注意 no-op 判断仍用字面 parentId：把孤儿"移到顶层"是一次真实写入（顺手修数据），
+    // 不能被有效父口径当成"没变化"而跳过。
+    final clash = _siblingNamed(decks, newParentId, self.name);
+    if (clash != null && clash.id != deckId) {
+      final live = liveIds(decks);
+      throw DeckNameConflictException(self.name,
+          parentName: effectiveParentId(live, newParentId) == null
+              ? null
+              : byId(decks, newParentId!)?.name);
     }
 
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -243,30 +257,37 @@ class CollectionRepo {
         .write(DecksCompanion(parentId: Value(newParentId), version: Value(now)));
   }
 
-  /// 删除分组：**级联**软删整棵子树，以及子树内的全部卡片。
+  /// 删除分组：**级联**软删整棵子树，以及子树内的全部卡片（**同一事务**）。
   ///
   /// 不级联就会留下"父已删、子还活着"的孤儿分组。笔记本身保留（软删不物理清除，
   /// 便于同步传播与误删恢复）。返回影响面，供 UI 如实提示。
+  ///
+  /// 为什么要事务：这里要写两张表（decks + cards）。分开写时如果在两条 update
+  /// 之间崩溃，就留下"组已删、卡还活着"的卡片——它不再属于任何可见分组，
+  /// 既不进聚合计数也删不掉，同步时还会继续往外推 tombstone 不齐的记录。
   Future<DeckDeleteReport> deleteDeck(String deckId) async {
-    final decks = await liveDecks();
-    final ids = subtreeIds(decks, deckId);
-    final cards = await (db.select(db.cards)
-          ..where((c) => c.deleted.equals(false) & c.deckId.isIn(ids)))
-        .get();
+    return db.transaction(() async {
+      final decks = await liveDecks();
+      final ids = subtreeIds(decks, deckId);
+      final cards = await (db.select(db.cards)
+            ..where((c) => c.deleted.equals(false) & c.deckId.isIn(ids)))
+          .get();
 
-    final now = DateTime.now().millisecondsSinceEpoch;
-    await (db.update(db.decks)..where((t) => t.id.isIn(ids)))
-        .write(DecksCompanion(deleted: const Value(true), version: Value(now)));
-    if (cards.isNotEmpty) {
-      await (db.update(db.cards)..where((c) => c.id.isIn(cards.map((c) => c.id).toSet())))
-          .write(CardsCompanion(deleted: const Value(true), version: Value(now)));
-    }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await (db.update(db.decks)..where((t) => t.id.isIn(ids)))
+          .write(DecksCompanion(deleted: const Value(true), version: Value(now)));
+      if (cards.isNotEmpty) {
+        await (db.update(db.cards)
+              ..where((c) => c.id.isIn(cards.map((c) => c.id).toSet())))
+            .write(CardsCompanion(deleted: const Value(true), version: Value(now)));
+      }
 
-    return DeckDeleteReport(
-      deckName: byId(decks, deckId)?.name ?? '',
-      decksDeleted: ids.length,
-      cardsDeleted: cards.length,
-    );
+      return DeckDeleteReport(
+        deckName: byId(decks, deckId)?.name ?? '',
+        decksDeleted: ids.length,
+        cardsDeleted: cards.length,
+      );
+    });
   }
 
   /// 某分组的完整路径（根 -> 自身），用于面包屑与导入提示。

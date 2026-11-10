@@ -132,10 +132,16 @@ Set<String> liveIds(List<Deck> decks) => decks.map((d) => d.id).toSet();
 /// 凭空少一个分组。这里曾经是两套口径——[buildTree] 提升孤儿、[childrenIndex]
 /// 不提升，于是同一个组在首页能看到、在 `allDecks()` 的下拉框里选不到。
 /// 现在 [childrenIndex] 与 [buildTree] 都只走这一个函数。
-String? effectiveParent(Set<String> live, Deck d) {
-  final p = d.parentId;
-  if (p == null) return null;
-  return live.contains(p) ? p : null;
+String? effectiveParent(Set<String> live, Deck d) =>
+    effectiveParentId(live, d.parentId);
+
+/// 同上，但入参是**父 id 本身**（新建/移动时手上只有 id，没有 Deck 行）。
+///
+/// 重名/同父判定必须用它：直接比 `d.parentId ?? ''` 会把"真顶层"和"父已删的
+/// 孤儿"当成两个不同的桶，于是顶层能长出两个同名兄弟。
+String? effectiveParentId(Set<String> live, String? parentId) {
+  if (parentId == null) return null;
+  return live.contains(parentId) ? parentId : null;
 }
 
 /// 自根到该分组的链（含自身）。带 visited 保护，脏数据成环也不会死循环。

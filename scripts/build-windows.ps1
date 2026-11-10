@@ -1,4 +1,4 @@
-# 本地构建 Windows 桌面 exe（需先装一次 VS Build Tools）。
+﻿# 本地构建 Windows 桌面 exe（需先装一次 VS Build Tools）。
 #
 # 前置（每台机器只需做一次，需管理员）：
 #   1) 安装 "Visual Studio 2022 Build Tools"，勾选工作负载：
@@ -48,7 +48,10 @@ Write-Output '=== flutter build windows --release ==='
 flutter build windows --release --no-tree-shake-icons
 if ($LASTEXITCODE -ne 0) { throw '构建失败（确认开发者模式已开启、MSVC 已装）' }
 
-$out = Join-Path $app 'build\windows\runner\Release'
+# Flutter 3.4x 的 Windows 产物在 build\windows\x64\runner\Release（多了 x64 一段）。
+# 早先这里写的是不带 x64 的老路径，构建成功却报不出目录，CI 的打包步骤直接找不到文件。
+$out = Join-Path $app 'build\windows\x64\runner\Release'
+if (-not (Test-Path $out)) { throw "构建产物目录不存在：$out（Flutter 版本的产物路径变过，同步改 app/test/windows_artifact_path_test.dart 的守卫）" }
 Write-Output "`n✅ 构建完成：$out"
 Get-ChildItem $out -Filter '*.exe' | ForEach-Object { Write-Output ("  " + $_.Name + "  " + [math]::Round($_.Length/1MB,1) + " MB") }
 Write-Output "`n把 Release 目录整个打包分发即可（含 onestep.exe 与其依赖 DLL）。"

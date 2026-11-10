@@ -193,6 +193,32 @@ void main() {
         reason: '20 行反复路过「大模型」「深度学习」，也只能算 2 个分组');
   });
 
+  test('正面背面都空的行：一个组都不建，也不报进 importedPaths', () async {
+    // 两层防御，这里钉的是**可观察结果**：
+    //  ① 解析层 `xlsx_importer.dart:73` 已 `if (front.isEmpty && back.isEmpty) continue;`；
+    //  ② 服务层现在也先定内容再 ensureChain —— 万一将来有第二个入口绕过 ①，
+    //     也不会在大模型/杂项 下面留下一个永远空的空壳分组。
+    final bytes = buildXlsx([
+      ['大模型::深度学习::正例', 'q1', 'a1'],
+      ['大模型::杂项::空壳', '', ''], // 正面背面都空
+      ['只填背面的行', '', 'only-back'], // 背面顶上来，仍算有效
+    ]);
+    final res = await XlsxImportService(repo).importBytes(bytes);
+
+    expect(res.rows, 2, reason: '空行在解析层就被丢了（rows 是解析后的行数，不是文件行数）');
+    expect(res.cardsCreated, 2, reason: '只填背面的行用背面当正面');
+    final decks = await repo.allDecks();
+    expect(decks.where((d) => d.name == '空壳'), isEmpty,
+        reason: '这一行什么都不产出，就不该在树上多一个组');
+    expect(decks.where((d) => d.name == '杂项'), isEmpty,
+        reason: '父链也一样不许建');
+    expect(res.importedPaths, containsAll(['大模型 › 深度学习 › 正例']),
+        reason: '有效行的路径照旧要报出来');
+    expect(res.importedPaths, isNot(contains('大模型 › 杂项 › 空壳')));
+    expect(await pathOf('正例'), ['大模型', '深度学习', '正例']);
+    expect(await pathOf('只填背面的行'), ['只填背面的行']);
+  });
+
   test('旧的扁平文件照旧导入（向后兼容）', () async {
     final bytes = buildXlsx([
       ['大模型', 'q1', 'a1'],
