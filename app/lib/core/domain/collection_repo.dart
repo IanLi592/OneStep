@@ -5,6 +5,9 @@ import 'package:drift/drift.dart';
 import '../fsrs/fsrs.dart';
 import '../data/database.dart';
 import 'cloze_parser.dart';
+import 'deck_tree.dart';
+
+export 'deck_tree.dart';
 
 /// 评分档位常量（与 FSRS 1..4 对齐）。
 class Rating {
@@ -39,6 +42,32 @@ class CollectionRepo {
   /// 每日复习上限。
   int maxReviewsPerDay = 200;
 
+  // ---------------------------------------------------------------------------
+  // 同步设置（只存本机）
+  // ---------------------------------------------------------------------------
+  //
+  // 存在 collection_configs，而该表**不在同步 payload 里**
+  // （sync_client._collectLocalChanges 只收集 deck/note/card），
+  // 所以服务器地址与密钥不会上传到同步服务端。
+
+  /// 同步服务器地址。
+  String syncServerUrl = 'http://127.0.0.1:8787';
+
+  /// 上次使用的账号。
+  String syncUsername = '';
+
+  /// 上次使用的密钥（本机明文，与卡片数据同一保护级别）。
+  String syncSecret = '';
+
+  /// 上次登录拿到的会话 token（重启后据此免登录直接同步）。
+  String syncToken = '';
+
+  /// token 对应的账号 id。
+  String syncAccountId = '';
+
+  /// 上次同步游标（下次只拉增量，不必全量重拉）。
+  int syncCursor = 0;
+
   /// 从集合配置加载设置项（应用启动时调用，恢复上次的值）。
   Future<void> loadSettings() async {
     final rows = await db.select(db.collectionConfigs).get();
@@ -49,6 +78,18 @@ class CollectionRepo {
     if (ret != null) desiredRetention = ret.clamp(0.70, 0.97);
     if (newCap != null) newCardsPerDay = newCap.clamp(0, 100);
     if (revCap != null) maxReviewsPerDay = revCap.clamp(20, 500);
+
+    // 同步设置：缺失则保留当前默认值。
+    final url = map['sync_server_url'];
+    final user = map['sync_username'];
+    final secret = map['sync_secret'];
+    final cursor = int.tryParse(map['sync_cursor'] ?? '');
+    if (url != null && url.trim().isNotEmpty) syncServerUrl = url;
+    if (user != null) syncUsername = user;
+    if (secret != null) syncSecret = secret;
+    if (cursor != null) syncCursor = cursor;
+    syncToken = map['sync_token'] ?? '';
+    syncAccountId = map['sync_account_id'] ?? '';
   }
 
   /// 持久化当前设置项到集合配置。
@@ -57,6 +98,20 @@ class CollectionRepo {
     await _upsertConfig('desired_retention', desiredRetention.toStringAsFixed(2), now);
     await _upsertConfig('new_cards_per_day', '$newCardsPerDay', now);
     await _upsertConfig('max_reviews_per_day', '$maxReviewsPerDay', now);
+  }
+
+  /// 单独持久化同步设置。
+  ///
+  /// 不与 [saveSettings] 合并：学习设置页滑杆结束时也会写库，若把同步字段
+  /// 一起写，可能用内存里的旧值覆盖掉刚在同步页存下的新值。
+  Future<void> saveSyncSettings() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _upsertConfig('sync_server_url', syncServerUrl, now);
+    await _upsertConfig('sync_username', syncUsername, now);
+    await _upsertConfig('sync_secret', syncSecret, now);
+    await _upsertConfig('sync_cursor', '$syncCursor', now);
+    await _upsertConfig('sync_token', syncToken, now);
+    await _upsertConfig('sync_account_id', syncAccountId, now);
   }
 
   Future<void> _upsertConfig(String key, String value, int version) async {
@@ -72,17 +127,52 @@ class CollectionRepo {
   }
 
   // ---------------------------------------------------------------------------
-  // 牌组
+  // 牌组（最多 kMaxDeckDepth 层的树）
   // ---------------------------------------------------------------------------
 
-  Future<List<Deck>> allDecks() =>
+  /// 未删除的全部分组（原始顺序，供树计算与校验用）。
+  Future<List<Deck>> liveDecks() =>
       (db.select(db.decks)..where((t) => t.deleted.equals(false))).get();
 
-  Future<Deck> createDeck(String name, {String? parentId}) async {
+  /// 全部牌组，按**树的前序**（父在前、同级按名）稳定排序。
+  Future<List<Deck>> allDecks() async =>
+      forestPreOrder(await liveDecks());
+
+  /// 首页用的森林：每个节点带深度与**子树聚合**计数。
+  Future<List<DeckNode>> deckTree({DateTime? now}) async =>
+      buildTree(await liveDecks(), await _perDeckCounts(now));
+
+  /// 新建分组。
+  ///
+  /// [parentId] 为 null 表示顶层。写入前校验两件事：
+  ///  * 深度不超过 [kMaxDeckDepth]；
+  ///  * 同一父下不重名（不同父下允许同名，例如 `A::算法` 与 `B::算法`）。
+  ///
+  /// [reuseOnConflict] 为 true 时（导入路径）同父重名**复用**已有分组而不是报错——
+  /// 导入 320 行时弹 30 次冲突提示会毁掉整个流程；手动新建走默认 false。
+  Future<Deck> createDeck(String name,
+      {String? parentId, bool reuseOnConflict = false}) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) throw ArgumentError('分组名不能为空');
+
+    final decks = await liveDecks();
+    final parentDepth = parentId == null ? 0 : depthOf(decks, parentId);
+    if (parentDepth + 1 > kMaxDeckDepth) {
+      throw DeckDepthException(parentDepth);
+    }
+
+    final parentName = parentId == null ? null : byId(decks, parentId)?.name;
+    for (final d in decks) {
+      if ((d.parentId ?? '') == (parentId ?? '') && d.name == trimmed) {
+        if (reuseOnConflict) return d;
+        throw DeckNameConflictException(trimmed, parentName: parentName);
+      }
+    }
+
     final now = DateTime.now().millisecondsSinceEpoch;
     final deck = DecksCompanion.insert(
       id: newId(),
-      name: name,
+      name: trimmed,
       parentId: Value(parentId),
       version: now,
     );
@@ -90,25 +180,102 @@ class CollectionRepo {
     return (db.select(db.decks)..where((t) => t.id.equals(deck.id.value))).getSingle();
   }
 
-  /// 重命名牌组。
+  /// 重命名分组（同父下不得与兄弟重名）。
   Future<void> renameDeck(String deckId, String newName) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) throw ArgumentError('分组名不能为空');
+
+    final decks = await liveDecks();
+    final self = byId(decks, deckId);
+    if (self == null) return;
+
+    for (final d in decks) {
+      if (d.id != deckId &&
+          (d.parentId ?? '') == (self.parentId ?? '') &&
+          d.name == trimmed) {
+        throw DeckNameConflictException(trimmed,
+            parentName: self.parentId == null
+                ? null
+                : byId(decks, self.parentId!)?.name);
+      }
+    }
+
     final now = DateTime.now().millisecondsSinceEpoch;
     await (db.update(db.decks)..where((t) => t.id.equals(deckId))).write(
-      DecksCompanion(name: Value(newName), version: Value(now)),
+      DecksCompanion(name: Value(trimmed), version: Value(now)),
     );
   }
 
-  /// 删除牌组(软删除)：牌组 + 其下所有卡片一并标记删除。
+  /// 把分组移动到另一个父下（[newParentId] 为 null 表示移到顶层）。
   ///
-  /// 卡片级联删除,保证牌组删掉后不再出现在浏览/统计里;
-  /// 笔记保留(软删除不物理清除,便于同步传播与误删恢复)。
-  Future<void> deleteDeck(String deckId) async {
+  /// 三道校验：不成环、整棵子树搬过去后最深点不超 [kMaxDeckDepth]、目标父下不重名。
+  Future<void> moveDeck(String deckId, String? newParentId) async {
+    final decks = await liveDecks();
+    final self = byId(decks, deckId);
+    if (self == null) return;
+    if ((self.parentId ?? '') == (newParentId ?? '')) return; // 没变化
+
+    if (newParentId != null &&
+        (newParentId == deckId ||
+            descendantIds(decks, deckId).contains(newParentId))) {
+      throw DeckCycleException(self.name, byId(decks, newParentId)?.name ?? '');
+    }
+
+    final newParentDepth = newParentId == null ? 0 : depthOf(decks, newParentId);
+    final subDepth = maxSubtreeDepth(decks, deckId);
+    if (newParentDepth + subDepth > kMaxDeckDepth) {
+      throw DeckDepthException(newParentDepth + subDepth - 1);
+    }
+
+    for (final d in decks) {
+      if (d.id != deckId &&
+          (d.parentId ?? '') == (newParentId ?? '') &&
+          d.name == self.name) {
+        throw DeckNameConflictException(self.name,
+            parentName: newParentId == null
+                ? null
+                : byId(decks, newParentId)?.name);
+      }
+    }
+
     final now = DateTime.now().millisecondsSinceEpoch;
     await (db.update(db.decks)..where((t) => t.id.equals(deckId)))
-        .write(DecksCompanion(deleted: const Value(true), version: Value(now)));
-    await (db.update(db.cards)..where((c) => c.deckId.equals(deckId)))
-        .write(CardsCompanion(deleted: const Value(true), version: Value(now)));
+        .write(DecksCompanion(parentId: Value(newParentId), version: Value(now)));
   }
+
+  /// 删除分组：**级联**软删整棵子树，以及子树内的全部卡片。
+  ///
+  /// 不级联就会留下"父已删、子还活着"的孤儿分组。笔记本身保留（软删不物理清除，
+  /// 便于同步传播与误删恢复）。返回影响面，供 UI 如实提示。
+  Future<DeckDeleteReport> deleteDeck(String deckId) async {
+    final decks = await liveDecks();
+    final ids = subtreeIds(decks, deckId);
+    final cards = await (db.select(db.cards)
+          ..where((c) => c.deleted.equals(false) & c.deckId.isIn(ids)))
+        .get();
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (db.update(db.decks)..where((t) => t.id.isIn(ids)))
+        .write(DecksCompanion(deleted: const Value(true), version: Value(now)));
+    if (cards.isNotEmpty) {
+      await (db.update(db.cards)..where((c) => c.id.isIn(cards.map((c) => c.id).toSet())))
+          .write(CardsCompanion(deleted: const Value(true), version: Value(now)));
+    }
+
+    return DeckDeleteReport(
+      deckName: byId(decks, deckId)?.name ?? '',
+      decksDeleted: ids.length,
+      cardsDeleted: cards.length,
+    );
+  }
+
+  /// 某分组的完整路径（根 -> 自身），用于面包屑与导入提示。
+  Future<List<String>> deckPathNames(String deckId) async =>
+      (chainOf(await liveDecks(), deckId)).map((d) => d.name).toList();
+
+  /// 某分组从根到自身的分组对象链（面包屑要能点，所以需要 id）。
+  Future<List<Deck>> deckChain(String deckId) async =>
+      chainOf(await liveDecks(), deckId);
 
   // ---------------------------------------------------------------------------
   // 笔记与卡片
@@ -257,16 +424,20 @@ class CollectionRepo {
   // 复习队列
   // ---------------------------------------------------------------------------
 
-  /// 取某牌组今日待复习/待学习卡片（学习中优先，再复习，再新卡，按 due 排序）。
+  /// 取某牌组今日待复习/待学习卡片。
+  ///
+  /// **子树聚合**：点父分组就是把整棵子树的到期卡一起背（Anki 语义）。
+  /// 每日额度也按子树整体计，不会因为分组拆得多就放大上限。
   Future<List<Card>> dueCards(String deckId, {DateTime? now}) async {
     final nowMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
     final todayStart = _startOfDayMs(now ?? DateTime.now());
+    final ids = subtreeIds(await liveDecks(), deckId);
 
     // 到期：queue 为 learning/review/relearning 且 due<=now，或新卡 due<=今日上限。
     final due = await (db.select(db.cards)
           ..where((c) =>
               c.deleted.equals(false) &
-              c.deckId.equals(deckId) &
+              c.deckId.isIn(ids) &
               c.queue.isBiggerOrEqualValue(0) &
               c.due.isBiggerOrEqualValue(0) &
               c.due.isSmallerOrEqualValue(nowMs))
@@ -274,12 +445,12 @@ class CollectionRepo {
         .get();
 
     // 新卡今日数量限制
-    final reviewedToday = await _newCardsIntroducedToday(deckId, todayStart);
+    final reviewedToday = await _newCardsIntroducedToday(ids, todayStart);
     var newQuota = newCardsPerDay - reviewedToday;
 
     // 复习卡今日数量限制：非新卡（学习/复习/重学）按 maxReviewsPerDay 封顶，
     // 已答的先扣掉。
-    final reviewsDoneToday = await _reviewsDoneToday(deckId, todayStart);
+    final reviewsDoneToday = await _reviewsDoneToday(ids, todayStart);
     var reviewQuota = maxReviewsPerDay - reviewsDoneToday;
 
     final result = <Card>[];
@@ -297,14 +468,14 @@ class CollectionRepo {
     return result;
   }
 
-  /// 今日已作答的非新卡数量（用于复习上限）。
-  Future<int> _reviewsDoneToday(String deckId, int sinceMs) async {
+  /// 今日已作答的非新卡数量（用于复习上限）。[ids] 为子树全部分组。
+  Future<int> _reviewsDoneToday(Set<String> ids, int sinceMs) async {
     final logs = await (db.select(db.reviewLogs)..where((l) => l.undone.equals(false)))
         .get();
     if (logs.isEmpty) return 0;
-    // 关联到本牌组的卡片。
+    // 关联到本子树的卡片。
     final cardIds = (await (db.select(db.cards)
-              ..where((c) => c.deckId.equals(deckId) & c.deleted.equals(false)))
+              ..where((c) => c.deckId.isIn(ids) & c.deleted.equals(false)))
             .get())
         .map((c) => c.id)
         .toSet();
@@ -313,44 +484,56 @@ class CollectionRepo {
         .length;
   }
 
-  Future<int> _newCardsIntroducedToday(String deckId, int sinceMs) async {
+  Future<int> _newCardsIntroducedToday(Set<String> ids, int sinceMs) async {
     final q = await (db.select(db.cards)
           ..where((c) =>
               c.deleted.equals(false) &
-              c.deckId.equals(deckId) &
+              c.deckId.isIn(ids) &
               c.queue.isBiggerOrEqualValue(0)))
         .get();
     // 新卡转学习的判据：reps>0 且首次复习在今日。
     return q.where((c) => c.reps > 0 && c.lastReview >= sinceMs && c.lastReview > 0).length;
   }
 
+  /// 一次查询算出**每个分组自己**的计数（不聚合），供树/聚合复用，避免 N+1。
+  Future<Map<String, DeckCounts>> _perDeckCounts(DateTime? now) async {
+    final nowMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final cards =
+        await (db.select(db.cards)..where((c) => c.deleted.equals(false))).get();
+    final out = <String, DeckCounts>{};
+    for (final c in cards) {
+      var n = 0, l = 0, r = 0;
+      if (c.queue == Queue.newCard) {
+        n = 1;
+      } else if (c.queue == Queue.learning || c.queue == Queue.relearning) {
+        if (c.due <= nowMs) l = 1;
+      } else if (c.queue == Queue.review) {
+        if (c.due <= nowMs) r = 1;
+      }
+      final prev = out[c.deckId] ?? DeckCounts.zero;
+      out[c.deckId] = DeckCounts(
+        newCards: prev.newCards + n,
+        learning: prev.learning + l,
+        review: prev.review + r,
+        totalCards: prev.totalCards + 1,
+        // 非新卡即"已学过"；挂起卡也算学过（与旧口径一致）。
+        studiedCards: prev.studiedCards + (c.queue == Queue.newCard ? 0 : 1),
+      );
+    }
+    return out;
+  }
+
   /// 某牌组今日统计（新/学习/到期）+ 总数/已学（供界面进度条与徽标）。
   ///
+  /// 层级化后口径是**整棵子树**，每张卡只计一次（由 [subtreeCount] 累加）。
+  ///
   /// - [total]（getter）: 今日待处理（新 + 到期学习/复习），即"待学习"数。
-  /// - [totalCards]: 牌组内卡片总数（Y）。
+  /// - [totalCards]: 子树内卡片总数（Y）。
   /// - [studiedCards]: 已学过（非新卡）数量（X），用于"已学X/Y"与进度条。
   Future<DeckCounts> deckCounts(String deckId, {DateTime? now}) async {
-    final nowMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
-    final all = await (db.select(db.cards)
-          ..where((c) => c.deleted.equals(false) & c.deckId.equals(deckId)))
-        .get();
-    var newCount = 0, learning = 0, review = 0;
-    for (final c in all) {
-      if (c.queue == Queue.newCard) {
-        newCount++;
-      } else if (c.queue == Queue.learning || c.queue == Queue.relearning) {
-        if (c.due <= nowMs) learning++;
-      } else if (c.queue == Queue.review) {
-        if (c.due <= nowMs) review++;
-      }
-    }
-    return DeckCounts(
-      newCards: newCount,
-      learning: learning,
-      review: review,
-      totalCards: all.length,
-      studiedCards: all.length - newCount, // 非新卡即已学过
-    );
+    final decks = await liveDecks();
+    final per = await _perDeckCounts(now);
+    return subtreeCount(decks, per, deckId);
   }
 
   // ---------------------------------------------------------------------------
@@ -479,31 +662,23 @@ class CollectionRepo {
   }
 }
 
-/// 牌组今日计数 + 总数/已学。
-class DeckCounts {
-  const DeckCounts({
-    required this.newCards,
-    required this.learning,
-    required this.review,
-    this.totalCards = 0,
-    this.studiedCards = 0,
+/// 删除分组的影响面（供 UI 如实提示"含 N 个子分组、M 张卡片"）。
+class DeckDeleteReport {
+  const DeckDeleteReport({
+    required this.deckName,
+    required this.decksDeleted,
+    required this.cardsDeleted,
   });
 
-  final int newCards;
-  final int learning;
-  final int review;
+  final String deckName;
 
-  /// 牌组内卡片总数（进度条分母）。
-  final int totalCards;
+  /// 被删分组数（**含自身**）。
+  final int decksDeleted;
+  final int cardsDeleted;
 
-  /// 已学过（非新卡）数量（进度条分子）。
-  final int studiedCards;
-
-  /// 今日待处理（新 + 到期学习/复习）。
-  int get total => newCards + learning + review;
-
-  /// 学习进度 0.0~1.0。
-  double get progress => totalCards == 0 ? 0 : studiedCards / totalCards;
+  /// 连带被删的子分组数（不含自身）。
+  int get childDecksDeleted => decksDeleted - 1;
+  bool get hasChildren => childDecksDeleted > 0;
 }
 
 /// JSON 字符串转义（避免手写引号问题）。

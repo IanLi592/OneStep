@@ -276,7 +276,8 @@ class ApkgImporter {
           ..where((t) => t.deleted.equals(false) & t.name.equals(name)))
         .get();
     if (existing.isNotEmpty) return existing.first;
-    return repo.createDeck(name);
+    // 导入路径统一走"重名即复用"，不让同名冲突打断整批导入。
+    return repo.createDeck(name, reuseOnConflict: true);
   }
 }
 

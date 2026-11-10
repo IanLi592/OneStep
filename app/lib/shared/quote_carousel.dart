@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'theme/palette.dart';
+
 /// 全局路由观察器:用于监听"进入/退回首页"以切换标语。
 ///
 /// 需在 MaterialApp.navigatorObservers 中注册本实例。
@@ -110,42 +112,52 @@ class _QuoteCarouselState extends State<QuoteCarousel> with RouteAware {
   @override
   Widget build(BuildContext context) {
     if (widget.quotes.isEmpty) return const SizedBox.shrink();
-    final scheme = Theme.of(context).colorScheme;
+    final p = InkPalette.of(context);
     final quote = widget.quotes[_index];
 
+    // 一行安静的标语：左侧一道墨痕，不加卡片底 —— 它是氛围，不是控件。
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.format_quote, size: 16, color: scheme.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 450),
-                transitionBuilder: (child, anim) => FadeTransition(
-                  opacity: anim,
+      padding: const EdgeInsets.fromLTRB(
+          InkTokens.s1, InkTokens.s2, InkTokens.s1, InkTokens.s3),
+      child: Row(
+        children: [
+          Container(
+            width: 14,
+            height: 2,
+            decoration: BoxDecoration(
+              color: p.primary.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+          const SizedBox(width: InkTokens.s2),
+          Flexible(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 450),
+              transitionBuilder: (child, anim) => FadeTransition(
+                opacity: anim,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, 0.35),
+                    end: Offset.zero,
+                  ).animate(anim),
                   child: child,
                 ),
-                child: Text(
-                  quote,
-                  key: ValueKey<int>(_index), // 用下标作 key 触发切换动画
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    height: 1.4,
-                    color: scheme.onSurfaceVariant,
-                  ),
+              ),
+              child: Text(
+                quote,
+                key: ValueKey<int>(_index), // 用下标作 key 触发切换动画
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  letterSpacing: 0.6,
+                  color: p.ink2,
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/data/database.dart';
 import 'core/domain/collection_repo.dart';
 import 'core/domain/providers.dart';
-import 'features/deck/deck_list_screen.dart';
+import 'features/shell/root_shell.dart';
 import 'shared/quote_carousel.dart' show appRouteObserver;
 import 'shared/theme/app_theme.dart';
 
@@ -16,14 +16,19 @@ Future<void> main() async {
 
   // 数据库初始化失败时不再静默崩溃（双击无反应），改为展示错误窗口。
   OnestepDb? db;
+  CollectionRepo? repo;
   Object? initError;
   StackTrace? initStack;
   try {
     db = OnestepDb(openConnection());
     // 建表 + 种子数据（默认牌组与笔记类型）。
     await db.seedDefaults().timeout(const Duration(seconds: 15));
-    // 恢复上次保存的设置项（新卡/复习上限、期望保持率）。
-    final repo = CollectionRepo(db);
+    // 恢复上次保存的设置项（新卡/复习上限、期望保持率、同步地址）。
+    //
+    // 关键：这个 repo 必须交给 repoProvider。曾经这里是 new 一个临时实例、
+    // loadSettings 完就丢弃，而 repoProvider 又 new 了另一个"从未加载设置"的
+    // 实例 -> 期望保持率与每日上限每次重启都回到默认值。
+    repo = CollectionRepo(db);
     await repo.loadSettings().timeout(const Duration(seconds: 10));
   } catch (e, st) {
     initError = e;
@@ -31,7 +36,7 @@ Future<void> main() async {
     _logError(e, st);
   }
 
-  if (db == null || initError != null) {
+  if (db == null || repo == null || initError != null) {
     // 展示错误窗口，让用户能看到失败原因，而不是"没反应"。
     runApp(InitErrorApp(
       error: (initError ?? '未知错误').toString(),
@@ -42,7 +47,10 @@ Future<void> main() async {
 
   runApp(
     ProviderScope(
-      overrides: [dbProvider.overrideWithValue(db)],
+      overrides: [
+        dbProvider.overrideWithValue(db),
+        repoProvider.overrideWithValue(repo),
+      ],
       child: const OnestepApp(),
     ),
   );
@@ -77,7 +85,7 @@ class OnestepApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       // 注册路由观察器:标语轮播靠它监听"进入/退回首页"切换。
       navigatorObservers: [appRouteObserver],
-      home: const DeckListScreen(),
+      home: const RootShell(),
     );
   }
 }

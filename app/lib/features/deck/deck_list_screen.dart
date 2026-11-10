@@ -3,32 +3,42 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/data/database.dart' show Deck;
+import '../../core/domain/deck_tree.dart';
 import '../../core/domain/providers.dart';
+import '../../core/domain/stats_providers.dart';
 import '../../core/domain/xlsx_import_service.dart';
-import '../../shared/quote_carousel.dart';
-import '../browser/browser_screen.dart';
+import '../../shared/theme/palette.dart';
+import '../../shared/widgets/ink.dart';
 import '../card_edit/add_card_sheet.dart';
 import '../review/review_screen.dart';
-import '../settings/settings_screen.dart';
-import '../stats/stats_screen.dart';
+import '../../shared/quote_carousel.dart';
 import 'deck_detail_screen.dart';
 
-/// 首页：牌组列表，每个牌组显示今日"新/学习/到期"数量，一步进入学习。
-class DeckListScreen extends ConsumerStatefulWidget {
-  const DeckListScreen({super.key});
+/// 首页（底部导航第一个 tab）：今日驾驶舱 + 分组列表。
+///
+/// 入口收敛：AppBar 只留「添加卡片」与「导入 Excel」两个常驻动作；
+/// 统计/我的已收进底部导航，新建分组降为分节标题右侧的文字动作。
+class HomeScreen extends ConsumerStatefulWidget {
+  const HomeScreen({super.key});
 
   @override
-  ConsumerState<DeckListScreen> createState() => _DeckListScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _DeckListScreenState extends ConsumerState<DeckListScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  /// 被折叠的分组 id（记住的是"收起哪些"，默认全展开）。
+  final Set<String> _collapsed = {};
+
+  void _toggle(String id) => setState(() {
+        if (!_collapsed.remove(id)) _collapsed.add(id);
+      });
+
   @override
   Widget build(BuildContext context) {
-    final decksAsync = ref.watch(decksProvider);
-    final scheme = Theme.of(context).colorScheme;
+    final p = InkPalette.of(context);
 
-    // 牌组/计数变化时，把最新待复习总数推给桌面小组件。
-    ref.listen(decksProvider, (_, _) => _pushWidget());
+    // 牌组变化时把最新待复习总数推给桌面小组件。
+    ref.listen<AsyncValue<List<Deck>>>(decksProvider, (_, _) => _pushWidget());
 
     return Scaffold(
       appBar: AppBar(
@@ -38,224 +48,91 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
           children: [
             const Text('跬步'),
             Text(
-              '积跬步，至千里',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w400,
-                color: scheme.onSurfaceVariant,
-              ),
+              _todayLabel(),
+              style:
+                  TextStyle(fontSize: 11.5, fontWeight: FontWeight.w400, color: p.ink3),
             ),
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: '浏览卡片',
-            icon: const Icon(Icons.style_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const BrowserScreen()),
-            ),
-          ),
-          IconButton(
-            tooltip: '统计',
-            icon: const Icon(Icons.bar_chart),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const StatsScreen()),
-            ),
-          ),
-          IconButton(
-            tooltip: '设置',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
+          // 「添加」已移到下方底部导航，这里只留导入。
           IconButton(
             tooltip: '导入 Excel',
             icon: const Icon(Icons.upload_file_outlined),
             onPressed: () => _importXlsx(context),
           ),
-          IconButton(
-            tooltip: '新增分组',
-            icon: const Icon(Icons.create_new_folder_outlined),
-            onPressed: () => _showCreateDeckDialog(context),
-          ),
-          IconButton(
-            tooltip: '添加卡片',
-            icon: const Icon(Icons.add),
-            onPressed: () => _openAddCard(context),
-          ),
+          const SizedBox(width: InkTokens.s1),
         ],
       ),
-      body: Column(
-        children: [
-          // 顶部概览:待学大数字 + 已学 + 去学习按钮。
-          _buildSummary(context, ref),
-          // 励志标语轮播(淡入淡出自动切换)。
-          const QuoteCarousel(),
-          Expanded(
-            child: decksAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(child: Text('加载失败：$e')),
-              data: (decks) {
-                if (decks.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.style_outlined, size: 64, color: scheme.outline),
-                        const SizedBox(height: 12),
-                        const Text('还没有牌组', style: TextStyle(fontSize: 18)),
-                        const SizedBox(height: 16),
-                        FilledButton(
-                          onPressed: () => _openAddCard(context),
-                          child: const Text('添加第一张卡片'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                return Center(
-                  // 宽屏(Windows)限宽居中,牌组卡片不横向拉伸。
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 900),
-                    child: ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: decks.length,
-                      itemBuilder: (context, i) {
-                        final deck = decks[i];
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _DeckCard(deckId: deck.id, deckName: deck.name),
-                        );
-                      },
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-      bottomNavigationBar: _buildBottomNav(context),
-    );
-  }
-
-  /// 底部导航:首页 / 添加 / 我的。
-  Widget _buildBottomNav(BuildContext context) {
-    return BottomNavigationBar(
-      currentIndex: 0,
-      type: BottomNavigationBarType.fixed,
-      selectedItemColor: Theme.of(context).colorScheme.primary,
-      unselectedItemColor: Theme.of(context).colorScheme.onSurfaceVariant,
-      onTap: (i) {
-        if (i == 1) {
-          _openAddCard(context);
-        } else if (i == 2) {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const SettingsScreen()),
-          );
-        }
-      },
-      items: const [
-        BottomNavigationBarItem(icon: Icon(Icons.home_outlined), label: '首页'),
-        BottomNavigationBarItem(icon: Icon(Icons.add_box_outlined), label: '添加'),
-        BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: '我的'),
-      ],
-    );
-  }
-
-  /// 顶部概览:待学大数字 + 已学计数 + 去学习按钮(取第一个有待学习的牌组)。
-  Widget _buildSummary(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final decksAsync = ref.watch(decksProvider);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: decksAsync.when(
-        loading: () => const SizedBox.shrink(),
-        error: (_, _) => const SizedBox.shrink(),
-        data: (decks) {
-          if (decks.isEmpty) return const SizedBox.shrink();
-          // 汇总所有牌组的待学/已学。
-          return FutureBuilder(
-            future: _aggregateCounts(ref, decks),
-            builder: (context, snap) {
-              if (!snap.hasData) return const SizedBox.shrink();
-              final agg = snap.data!;
-              return Row(
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.baseline,
-                        textBaseline: TextBaseline.alphabetic,
-                        children: [
-                          Text('${agg.due}',
-                              style: TextStyle(
-                                  fontSize: 40,
-                                  fontWeight: FontWeight.w700,
-                                  color: scheme.onSurface)),
-                          const SizedBox(width: 8),
-                          Text('待学 / 已学 ${agg.studied}张',
-                              style: TextStyle(
-                                  fontSize: 15,
-                                  color: scheme.onSurfaceVariant)),
-                        ],
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: InkTokens.pageMaxWidth),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(
+                InkTokens.s4, InkTokens.s2, InkTokens.s4, InkTokens.s8),
+            children: [
+              const _TodayPanel(),
+              const QuoteCarousel(),
+              InkSection(
+                title: '我的分组',
+                padding: const EdgeInsets.fromLTRB(
+                    InkTokens.s1, InkTokens.s4, InkTokens.s1, InkTokens.s2),
+                trailing: TextButton.icon(
+                  onPressed: () => _showCreateDeckDialog(context),
+                  icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+                  label: const Text('新建分组'),
+                ),
+              ),
+              ref.watch(deckTreeProvider).when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.only(top: InkTokens.s8),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (e, _) =>
+                    InkEmpty(title: '分组加载失败', hint: '$e', icon: Icons.error_outline),
+                data: (tree) {
+                  if (tree.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.only(top: InkTokens.s8),
+                      child: InkEmpty(
+                        title: '还没有分组',
+                        hint: '先建一个分组，或从 Excel 批量导入卡片',
+                        icon: Icons.folder_open_outlined,
                       ),
+                    );
+                  }
+                  return Column(
+                    children: [
+                      for (final node in flattenVisible(tree, _collapsed))
+                        Padding(
+                          padding: EdgeInsets.only(
+                            bottom: InkTokens.s3,
+                            // 每深一层缩进一档，层级关系一眼可见。
+                            left: (node.depth - 1) * InkTokens.s4,
+                          ),
+                          child: _DeckCard(
+                            node: node,
+                            collapsed: _collapsed.contains(node.id),
+                            onToggle: () => _toggle(node.id),
+                          ),
+                        ),
                     ],
-                  ),
-                  const Spacer(),
-                  // 去学习按钮:进入第一个有待学习的牌组。
-                  FilledButton(
-                    onPressed: agg.dueDeckId == null
-                        ? null
-                        : () {
-                            Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => ReviewScreen(
-                                deckId: agg.dueDeckId!,
-                                deckName: agg.dueDeckName ?? '',
-                              ),
-                            ));
-                          },
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFF6A623),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 22, vertical: 14),
-                    ),
-                    child: const Text('去学习'),
-                  ),
-                ],
-              );
-            },
-          );
-        },
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  /// 汇总所有牌组的待学/已学总数,并找出第一个有待学习的牌组。
-  Future<_Agg> _aggregateCounts(WidgetRef ref, List<Deck> decks) async {
-    final repo = ref.read(repoProvider);
-    var due = 0, studied = 0;
-    String? dueDeckId;
-    String? dueDeckName;
-    for (final d in decks) {
-      final c = await repo.deckCounts(d.id);
-      due += c.total;
-      studied += c.studiedCards;
-      if (dueDeckId == null && c.total > 0) {
-        dueDeckId = d.id;
-        dueDeckName = d.name;
-      }
-    }
-    return _Agg(due: due, studied: studied, dueDeckId: dueDeckId, dueDeckName: dueDeckName);
-  }
-
-  Future<void> _openAddCard(BuildContext context) async {
-    await showAddCardSheet(context);
+  /// 顶部副标题：今日日期与星期（不与轮播标语重复）。
+  String _todayLabel() {
+    const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    final n = DateTime.now();
+    return '${n.month}月${n.day}日 · ${weekdays[n.weekday - 1]}';
   }
 
   /// 把最新待复习总数推送到桌面小组件。
@@ -284,12 +161,12 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+          InkButton(
+            label: '创建',
             onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('创建'),
+            expand: false,
+            height: 44,
           ),
         ],
       ),
@@ -299,50 +176,60 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
 
     try {
       await repo.createDeck(name);
-      // 刷新牌组列表与桌面小组件。
-      ref.invalidate(decksProvider);
+      await refreshHome(ref);
       _pushWidget();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已创建分组「$name」'), duration: const Duration(seconds: 2)),
+          SnackBar(
+              content: Text('已创建分组「$name」'),
+              duration: const Duration(seconds: 2)),
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('创建失败：$e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('创建失败：$e')));
       }
     }
   }
 
-  /// 导入 Excel(.xlsx):选文件 -> 解析 -> 按牌组建卡 -> 反馈。
+  /// 导入 Excel(.xlsx)：选文件 -> 解析 -> 按牌组建卡 -> 反馈。
   Future<void> _importXlsx(BuildContext context) async {
-    // 1) 选文件(仅 xlsx)。file_picker 13.x:返回 List<PlatformFile>。
     List<PlatformFile> picked;
     try {
-      picked = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['xlsx'],
-      );
+      picked =
+          await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx']);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('打开文件选择器失败:$e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('打开文件选择器失败：$e')));
       }
       return;
     }
     if (picked.isEmpty) return; // 用户取消
-    final file = picked.first;
 
     try {
-      // 2) 读字节。13.x:用 readAsBytes()(不再有 withData 参数)。
-      final bytes = await file.readAsBytes();
-
-      // 3) 导入。
+      final pickedFile = picked.first;
+      final bytes = await pickedFile.readAsBytes();
       final repo = ref.read(repoProvider);
-      final result = await XlsxImportService(repo).importBytes(bytes);
+      // 传文件名：闪记盒按叶子逐个导出，父路径只写在文件名里。
+      final result = await XlsxImportService(repo)
+          .importBytes(bytes, sourceFileName: pickedFile.name);
+
+      if (result.aborted) {
+        // D4：超 5 层整批中止，原样列出问题路径，让用户自己改文件而不是偷偷截断。
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('分组最多 $kMaxDeckDepth 层，以下路径超限，本次未导入：\n'
+                  '${result.rejectedPaths.take(5).join('\n')}'
+                  '${result.rejectedPaths.length > 5 ? '\n…共 ${result.rejectedPaths.length} 条' : ''}'),
+              duration: const Duration(seconds: 8),
+            ),
+          );
+        }
+        return;
+      }
 
       if (result.cardsCreated == 0) {
         if (context.mounted) {
@@ -353,190 +240,605 @@ class _DeckListScreenState extends ConsumerState<DeckListScreen> {
         return;
       }
 
-      // 4) 刷新列表与桌面小组件。
-      ref.invalidate(decksProvider);
+      await refreshHome(ref);
       _pushWidget();
-
       if (context.mounted) {
+        final depthHint = result.maxDepthReached > 1
+            ? '，最深 ${result.maxDepthReached} 层'
+            : '';
+        final where = result.importedPaths.length == 1
+            ? '\n归入：${result.importedPaths.first}'
+            : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '导入完成:${result.cardsCreated} 张卡片,'
-              '${result.decksCreated} 个新分组'
-              '${result.decksReused > 0 ? ',${result.decksReused} 个已有分组' : ''}',
+              '导入完成：${result.cardsCreated} 张卡片，'
+              '新建 ${result.decksCreated} 个分组'
+              '${result.decksReused > 0 ? '，复用 ${result.decksReused} 个' : ''}'
+              '$depthHint$where',
             ),
-            duration: const Duration(seconds: 4),
+            duration: const Duration(seconds: 5),
           ),
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导入失败:$e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('导入失败：$e')));
       }
     }
   }
 }
 
-class _DeckCard extends ConsumerWidget {
-  const _DeckCard({required this.deckId, required this.deckName});
-
-  final String deckId;
-  final String deckName;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final countsAsync = ref.watch(deckCountsProvider(deckId));
-    final scheme = Theme.of(context).colorScheme;
-    final cover = _deckCover(deckName);
-
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => DeckDetailScreen(deckId: deckId, deckName: deckName),
-          ));
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: countsAsync.when(
-            loading: () => Text(deckName),
-            error: (_, _) => Text(deckName),
-            data: (counts) {
-              final due = counts.total;
-              final pct = (counts.progress * 100).round();
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 封面占位:按牌组名生成的渐变方块。
-                  Container(
-                    width: 84,
-                    height: 84,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [cover.$1, cover.$2],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      deckName.isEmpty ? '?' : deckName.characters.first,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 30,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  // 右侧信息区。
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(deckName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontSize: 17, fontWeight: FontWeight.w600)),
-                            ),
-                            Icon(Icons.chevron_right, color: scheme.outline, size: 20),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        // 待学习徽标 + 已学X/Y
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: due > 0
-                                    ? const Color(0xFFF6A623).withValues(alpha: 0.18)
-                                    : scheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                due > 0 ? '待学习 $due 张' : '今日已清空 ✓',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: due > 0
-                                      ? const Color(0xFFC77C00)
-                                      : scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                            const Spacer(),
-                            Text(
-                              '已学 ${counts.studiedCards}/${counts.totalCards}',
-                              style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: scheme.onSurfaceVariant),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        // 进度条
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: counts.progress,
-                            minHeight: 6,
-                            backgroundColor: scheme.surfaceContainerHighest,
-                            valueColor: AlwaysStoppedAnimation(
-                                due > 0 ? const Color(0xFFF6A623) : scheme.primary),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text('进度 $pct%',
-                            style: TextStyle(
-                                fontSize: 11.5, color: scheme.onSurfaceVariant)),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 按牌组名生成稳定的双色渐变(封面占位)。
-  (Color, Color) _deckCover(String name) {
-    const palette = [
-      (Color(0xFF3B6EA5), Color(0xFF6FA8DC)),
-      (Color(0xFF2E7D6B), Color(0xFF6FCF97)),
-      (Color(0xFF8E5AA8), Color(0xFFC39BD3)),
-      (Color(0xFFC75C5C), Color(0xFFF1948A)),
-      (Color(0xFFD4883B), Color(0xFFF8C471)),
-      (Color(0xFF4A6FA5), Color(0xFF85C1E9)),
-    ];
-    final h = name.isEmpty ? 0 : name.codeUnits.fold<int>(0, (a, c) => a + c);
-    return palette[h % palette.length];
-  }
+/// 刷新首页所有派生计数。
+///
+/// 复习/编辑返回后必须整体刷一遍：今日面板、分组卡、进度环、连续打卡分别
+/// 来自不同 provider，只刷其中一个就会出现"学了但数字不动"。
+Future<void> refreshHome(WidgetRef ref) async {
+  ref.invalidate(deckCountsProvider);
+  ref.invalidate(deckTreeProvider);
+  ref.invalidate(todayOverviewProvider);
+  ref.invalidate(todayReviewCountProvider);
+  ref.invalidate(studyStreakProvider);
+  ref.invalidate(decksProvider);
 }
 
-/// 顶部概览的聚合数据。
-class _Agg {
-  const _Agg({
+/// 首页分组树（含子树聚合计数）。跟着 decksProvider 一起失效重算。
+final deckTreeProvider = FutureProvider<List<DeckNode>>((ref) async {
+  await ref.watch(decksProvider.future);
+  return ref.watch(repoProvider).deckTree();
+});
+
+// ---------------------------------------------------------------------------
+// 今日驾驶舱
+// ---------------------------------------------------------------------------
+
+/// 跨分组汇总出的今日面板数据。
+class TodayOverview {
+  const TodayOverview({
     required this.due,
     required this.studied,
+    required this.totalCards,
+    required this.newCards,
     required this.dueDeckId,
     required this.dueDeckName,
   });
 
   final int due;
   final int studied;
+  final int totalCards;
+  final int newCards;
   final String? dueDeckId;
   final String? dueDeckName;
+
+  bool get hasWork => dueDeckId != null;
+}
+
+/// 首页今日总览：所有分组的待学/已学聚合 + 第一个有待学的分组。
+///
+/// 必须从**树的根节点**累加：deckCounts 是子树聚合口径，
+/// 逐分组累加会把父子重复计数（实测 8 张卡会显示成 14 张）。
+final todayOverviewProvider = FutureProvider<TodayOverview>((ref) async {
+  await ref.watch(decksProvider.future);
+  final repo = ref.watch(repoProvider);
+  final tree = await repo.deckTree();
+  var due = 0, studied = 0, total = 0, newC = 0;
+  String? dueDeckId, dueDeckName;
+
+  // 前序找第一个有待学的分组（父优先，与首页顺序一致）。
+  String? pickedId, pickedName;
+  void pick(List<DeckNode> nodes) {
+    for (final n in nodes) {
+      if (pickedId != null) return;
+      if (n.counts.total > 0) {
+        pickedId = n.id;
+        pickedName = n.name;
+        return;
+      }
+      pick(n.children);
+    }
+  }
+
+  for (final root in tree) {
+    due += root.counts.total;
+    studied += root.counts.studiedCards;
+    total += root.counts.totalCards;
+    newC += root.counts.newCards;
+  }
+  pick(tree);
+  dueDeckId = pickedId;
+  dueDeckName = pickedName;
+
+  return TodayOverview(
+    due: due,
+    studied: studied,
+    totalCards: total,
+    newCards: newC,
+    dueDeckId: dueDeckId,
+    dueDeckName: dueDeckName,
+  );
+});
+
+class _TodayPanel extends ConsumerWidget {
+  const _TodayPanel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = InkPalette.of(context);
+    final overview = ref.watch(todayOverviewProvider);
+    final todayDone = ref.watch(todayReviewCountProvider);
+    final streak = ref.watch(studyStreakProvider);
+
+    return overview.when(
+      loading: () => const SizedBox(height: 168),
+      error: (e, _) => InkCard(
+        raise: false,
+        child: Text('今日概览加载失败：$e', style: TextStyle(color: p.cinnabar)),
+      ),
+      data: (ov) {
+        final done = todayDone.valueOrNull ?? 0;
+        final remaining = ov.due;
+        final sessionTotal = done + remaining;
+        final ring = sessionTotal == 0 ? 0.0 : done / sessionTotal;
+
+        return InkCard(
+          // 面板本身不可点（"开始学习"是唯一入口），所以关掉按压阴影。
+          raise: false,
+          borderColor: p.primary.withValues(alpha: 0.35),
+          padding: const EdgeInsets.all(InkTokens.s5),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  InkRing(
+                    value: ring,
+                    color: p.primary,
+                    trackColor: p.sunken,
+                    center: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('$done',
+                            style: TextStyle(
+                                fontSize: 23,
+                                fontWeight: FontWeight.w700,
+                                color: p.ink1)),
+                        Text('今日已学', style: TextStyle(fontSize: 10.5, color: p.ink3)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: InkTokens.s5),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            Text('$remaining',
+                                style: TextStyle(
+                                    fontSize: 38,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.05,
+                                    letterSpacing: 0.5,
+                                    color: remaining > 0 ? p.cinnabar : p.pine)),
+                            const SizedBox(width: InkTokens.s2),
+                            Text('张待学',
+                                style: TextStyle(fontSize: 14.5, color: p.ink2)),
+                          ],
+                        ),
+                        const SizedBox(height: InkTokens.s1),
+                        Text(
+                          ov.totalCards == 0
+                              ? '还没有卡片，点下方「添加」新建'
+                              : '已学 ${ov.studied}/${ov.totalCards} 张 · 新卡 ${ov.newCards}',
+                          style: TextStyle(fontSize: 12.5, color: p.ink3),
+                        ),
+                        if ((streak.valueOrNull ?? 0) > 0) ...[
+                          const SizedBox(height: InkTokens.s2),
+                          InkChip(
+                            label: '连续打卡 ${streak.valueOrNull ?? 0} 天',
+                            icon: Icons.local_fire_department,
+                            color: p.cinnabar,
+                            dense: true,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: InkTokens.s4),
+              // 三态而非两态：库里一张卡都没有时，"今日已清空"是句假话。
+              if (ov.hasWork)
+                InkButton(
+                  label: '开始学习',
+                  icon: Icons.play_arrow_rounded,
+                  onPressed: () => _start(context, ref, ov),
+                )
+              else if (ov.totalCards == 0)
+                InkButton(
+                  label: '添加第一张卡片',
+                  icon: Icons.add,
+                  onPressed: () => showAddCardSheet(context),
+                )
+              else
+                InkButton(
+                  label: '今日已清空',
+                  icon: Icons.check_rounded,
+                  tone: InkTone.pale,
+                  onPressed: null,
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _start(
+      BuildContext context, WidgetRef ref, TodayOverview ov) async {
+    final id = ov.dueDeckId;
+    if (id == null) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ReviewScreen(deckId: id, deckName: ov.dueDeckName ?? ''),
+    ));
+    if (!context.mounted) return;
+    await refreshHome(ref);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 分组卡
+// ---------------------------------------------------------------------------
+
+class _DeckCard extends ConsumerWidget {
+  const _DeckCard({
+    required this.node,
+    required this.collapsed,
+    required this.onToggle,
+  });
+
+  final DeckNode node;
+  final bool collapsed;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = InkPalette.of(context);
+    final counts = node.counts;
+    final due = counts.total;
+    final empty = counts.totalCards == 0;
+    final hasChildren = node.children.isNotEmpty;
+
+    return InkCard(
+      onTap: () async {
+        await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) =>
+              DeckDetailScreen(deckId: node.id, deckName: node.name),
+        ));
+        if (!context.mounted) return;
+        await refreshHome(ref);
+      },
+      child: Column(
+        children: [
+          Row(
+            children: [
+              // 折叠箭头：有子分组就常驻显示，不靠 hover 显形。
+              SizedBox(
+                width: hasChildren ? 26 : 0,
+                child: hasChildren
+                    ? IconButton(
+                        tooltip: collapsed ? '展开子分组' : '收起子分组',
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 26, minHeight: 26),
+                        icon: Icon(
+                          collapsed
+                              ? Icons.expand_more
+                              : Icons.expand_less,
+                          color: p.ink2,
+                        ),
+                        onPressed: onToggle,
+                      )
+                    : null,
+              ),
+              // 封面：统一墨青淡染 + 首字（单强调色原则）。
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: p.primaryPale,
+                  borderRadius: BorderRadius.circular(InkTokens.rButton),
+                  border: Border.all(
+                      color: p.primary.withValues(alpha: 0.3), width: 1),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  node.name.isEmpty ? '?' : node.name.characters.first,
+                  style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                      color: p.primary),
+                ),
+              ),
+              const SizedBox(width: InkTokens.s3),
+              Expanded(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        node.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    if (empty)
+                      InkChip(label: '空分组', color: p.ink3, dense: true)
+                    else if (due > 0)
+                      InkChip(label: '$due 待学', color: p.cinnabar, dense: true)
+                    else
+                      InkChip(label: '已清空', color: p.pine, dense: true),
+                  ],
+                ),
+              ),
+              _DeckMenu(node: node),
+            ],
+          ),
+          if (empty) ...[
+            const SizedBox(height: InkTokens.s3),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('还没有卡片，点进去添加或从 Excel 导入',
+                  style: TextStyle(fontSize: 12, color: p.ink3)),
+            ),
+          ] else ...[
+            const SizedBox(height: InkTokens.s3),
+            InkStrokeBar(
+              value: counts.progress,
+              height: 8,
+              color: p.primary,
+              deepColor: p.primaryDeep,
+            ),
+            const SizedBox(height: InkTokens.s2),
+            Row(
+              children: [
+                Text('已学 ${counts.studiedCards}/${counts.totalCards}',
+                    style: TextStyle(fontSize: 12, color: p.ink3)),
+                const Spacer(),
+                Text('${(counts.progress * 100).round()}%',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: p.ink2)),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 分组行的操作菜单：新建子分组 / 重命名 / 删除。
+///
+/// 到第 5 层时"新建子分组"置灰并写明原因，而不是点下去才报错。
+class _DeckMenu extends ConsumerStatefulWidget {
+  const _DeckMenu({required this.node});
+
+  final DeckNode node;
+
+  @override
+  ConsumerState<_DeckMenu> createState() => _DeckMenuState();
+}
+
+class _DeckMenuState extends ConsumerState<_DeckMenu> {
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
+  }
+
+  Future<void> _createChild() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('在「${widget.node.name}」下新建子分组'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: '子分组名称'),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+          InkButton(
+            label: '创建',
+            expand: false,
+            height: 44,
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || !mounted) return;
+
+    final repo = ref.read(repoProvider);
+    try {
+      await repo.createDeck(name, parentId: widget.node.id);
+      await refreshHome(ref);
+      _toast('已在「${widget.node.name}」下创建「$name」');
+    } on DeckDepthException catch (e) {
+      _toast(e.toString());
+    } on DeckNameConflictException catch (e) {
+      _toast(e.toString());
+    } catch (e) {
+      _toast('创建失败：$e');
+    }
+  }
+
+  Future<void> _rename() async {
+    final controller = TextEditingController(text: widget.node.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重命名分组'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: '分组名称'),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+          InkButton(
+            label: '保存',
+            expand: false,
+            height: 44,
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || name == widget.node.name || !mounted) {
+      return;
+    }
+    final repo = ref.read(repoProvider);
+    try {
+      await repo.renameDeck(widget.node.id, name);
+      await refreshHome(ref);
+      _toast('已重命名为「$name」');
+    } on DeckNameConflictException catch (e) {
+      _toast(e.toString());
+    } catch (e) {
+      _toast('重命名失败：$e');
+    }
+  }
+
+  Future<void> _delete() async {
+    final node = widget.node;
+    final childCount = node.subtreeDeckCount - 1;
+    final cardCount = node.counts.totalCards;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final p = InkPalette.of(ctx);
+        final scope = childCount > 0
+            ? '及其 $childCount 个子分组、$cardCount 张卡片'
+            : '及其中 $cardCount 张卡片';
+        return AlertDialog(
+          title: Text('删除「${node.name}」？'),
+          content: Text('将删除该分组$scope。删除后进入回收站，可恢复。'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('取消')),
+            InkButton(
+              label: '删除',
+              tone: InkTone.solid,
+              color: p.cinnabar,
+              deep: p.cinnabarDeep,
+              expand: false,
+              height: 44,
+              onPressed: () => Navigator.of(ctx).pop(true),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    final repo = ref.read(repoProvider);
+    final report = await repo.deleteDeck(node.id);
+    await refreshHome(ref);
+    if (!mounted) return;
+    _toast('已删除「${report.deckName}」'
+        '${report.childDecksDeleted > 0 ? '（含 ${report.childDecksDeleted} 个子分组）' : ''}'
+        '，共 ${report.cardsDeleted} 张卡片');
+  }
+
+  /// 移动到别的父分组（或移到顶层）。
+  Future<void> _move() async {
+    const topSentinel = '__top__'; // showDialog 的 null 表示"取消"，故另设哨兵
+    final repo = ref.read(repoProvider);
+    final all = await repo.liveDecks();
+    if (!mounted) return;
+    // 自己和自己整棵子树都不能当目标，否则成环。
+    final excluded = subtreeIds(all, widget.node.id);
+    final candidates = all.where((d) => !excluded.contains(d.id)).toList();
+
+    final target = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('把「${widget.node.name}」移动到'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, topSentinel),
+            child: const Text('顶层（不作为子分组）'),
+          ),
+          for (final d in candidates)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, d.id),
+              child: Text(d.name),
+            ),
+        ],
+      ),
+    );
+    if (target == null || !mounted) return;
+
+    try {
+      await repo.moveDeck(
+          widget.node.id, target == topSentinel ? null : target);
+      await refreshHome(ref);
+      _toast('已移动「${widget.node.name}」');
+    } on DeckCycleException catch (e) {
+      _toast(e.toString());
+    } on DeckDepthException catch (e) {
+      _toast(e.toString());
+    } on DeckNameConflictException catch (e) {
+      _toast(e.toString());
+    } catch (e) {
+      _toast('移动失败：$e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = InkPalette.of(context);
+    final canAdd = widget.node.canAddChild;
+    return PopupMenuButton<String>(
+      tooltip: '分组操作',
+      icon: Icon(Icons.more_horiz, size: 20, color: p.ink2),
+      onSelected: (v) => switch (v) {
+        'child' => _createChild(),
+        'rename' => _rename(),
+        'move' => _move(),
+        'delete' => _delete(),
+        _ => null,
+      },
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          value: 'child',
+          enabled: canAdd,
+          child: Row(
+            children: [
+              const Text('新建子分组'),
+              const Spacer(),
+              if (!canAdd)
+                Text('已达 $kMaxDeckDepth 层',
+                    style: TextStyle(fontSize: 11.5, color: p.ink3)),
+            ],
+          ),
+        ),
+        const PopupMenuItem(value: 'rename', child: Text('重命名')),
+        const PopupMenuItem(value: 'move', child: Text('移动到…')),
+        const PopupMenuItem(value: 'delete', child: Text('删除')),
+      ],
+    );
+  }
 }

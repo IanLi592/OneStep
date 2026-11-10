@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/domain/providers.dart';
-import '../sync/sync_screen.dart';
+import '../../shared/theme/palette.dart';
+import '../../shared/widgets/ink.dart';
 
 /// 设置页：每日新卡上限、复习上限、期望记忆保持率。
+///
+/// 数值改动即时落库（onChangeEnd），不需要"保存"按钮。
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -18,24 +20,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late int _maxReviews;
   late double _retention;
   bool _initialized = false;
-  String _version = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _loadVersion();
-  }
-
-  Future<void> _loadVersion() async {
-    try {
-      final info = await PackageInfo.fromPlatform();
-      if (mounted) {
-        setState(() => _version = 'v${info.version}+${info.buildNumber}');
-      }
-    } catch (_) {
-      // 读取失败则不显示版本号，不影响功能。
-    }
-  }
 
   @override
   void didChangeDependencies() {
@@ -51,43 +35,46 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final p = InkPalette.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      appBar: AppBar(title: const Text('学习设置')),
+      body: InkPage(
         children: [
-          Text('学习', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Card(
+          InkSection(title: '每日节奏', padding: const EdgeInsets.only(bottom: InkTokens.s2)),
+          InkCard(
+            raise: false,
+            padding: const EdgeInsets.fromLTRB(
+                InkTokens.s4, InkTokens.s2, InkTokens.s4, InkTokens.s2),
             child: Column(
               children: [
-                ListTile(
-                  title: const Text('每日新卡上限'),
-                  trailing: Text('$_newPerDay', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w600)),
-                ),
-                Slider(
+                _slider(
+                  p,
+                  label: '新卡上限',
+                  hint: '每天最多引入多少张新卡',
                   value: _newPerDay.toDouble(),
-                  min: 0, max: 100, divisions: 100,
-                  label: '$_newPerDay',
+                  min: 0,
+                  max: 100,
+                  divisions: 100,
+                  display: '$_newPerDay 张',
                   onChanged: (v) => setState(() => _newPerDay = v.round()),
-                  onChangeEnd: (_) async {
+                  onEnd: () async {
                     final repo = ref.read(repoProvider);
                     repo.newCardsPerDay = _newPerDay;
                     await repo.saveSettings();
                   },
                 ),
-                const Divider(height: 1),
-                ListTile(
-                  title: const Text('每日复习上限'),
-                  trailing: Text('$_maxReviews', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w600)),
-                ),
-                Slider(
+                Divider(height: 1, thickness: 1, color: p.line),
+                _slider(
+                  p,
+                  label: '复习上限',
+                  hint: '每天最多复习多少张（含学习中）',
                   value: _maxReviews.toDouble(),
-                  min: 20, max: 500, divisions: 48,
-                  label: '$_maxReviews',
+                  min: 20,
+                  max: 500,
+                  divisions: 24,
+                  display: '$_maxReviews 张',
                   onChanged: (v) => setState(() => _maxReviews = v.round()),
-                  onChangeEnd: (_) async {
+                  onEnd: () async {
                     final repo = ref.read(repoProvider);
                     repo.maxReviewsPerDay = _maxReviews;
                     await repo.saveSettings();
@@ -96,55 +83,88 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          Text('记忆', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Card(
-            child: Column(
+          const SizedBox(height: InkTokens.s5),
+          InkSection(title: '记忆', padding: const EdgeInsets.only(bottom: InkTokens.s2)),
+          InkCard(
+            raise: false,
+            padding: const EdgeInsets.fromLTRB(
+                InkTokens.s4, InkTokens.s2, InkTokens.s4, InkTokens.s2),
+            child: _slider(
+              p,
+              label: '期望记忆保持率',
+              hint: '越高复习越频繁、记忆越牢；0.9 是兼顾效率的常用值',
+              value: _retention,
+              min: 0.70,
+              max: 0.97,
+              divisions: 27,
+              display: '${(_retention * 100).toStringAsFixed(0)}%',
+              onChanged: (v) => setState(() => _retention = v),
+              onEnd: () async {
+                final repo = ref.read(repoProvider);
+                repo.desiredRetention = _retention;
+                await repo.saveSettings();
+              },
+            ),
+          ),
+          const SizedBox(height: InkTokens.s5),
+          InkCard(
+            raise: false,
+            padding: const EdgeInsets.all(InkTokens.s4),
+            child: Row(
               children: [
-                ListTile(
-                  title: const Text('期望记忆保持率'),
-                  subtitle: const Text('越高复习越频繁，记忆越牢'),
-                  trailing: Text('${(_retention * 100).toStringAsFixed(0)}%',
-                      style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w600)),
-                ),
-                Slider(
-                  value: _retention,
-                  min: 0.70, max: 0.97, divisions: 27,
-                  label: '${(_retention * 100).toStringAsFixed(0)}%',
-                  onChanged: (v) => setState(() => _retention = v),
-                  onChangeEnd: (_) async {
-                    final repo = ref.read(repoProvider);
-                    repo.desiredRetention = _retention;
-                    await repo.saveSettings();
-                  },
+                Icon(Icons.info_outline, size: 18, color: p.ink3),
+                const SizedBox(width: InkTokens.s3),
+                Expanded(
+                  child: Text(
+                    '这些设置只影响本机。复习间隔由 FSRS-7 依据你的打分实时计算。',
+                    style: TextStyle(fontSize: 12.5, height: 1.6, color: p.ink2),
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          Text('同步', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.sync_outlined),
-              title: const Text('多设备同步'),
-              subtitle: const Text('登录账号，跨设备合并学习进度'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SyncScreen()),
+        ],
+      ),
+    );
+  }
+
+  Widget _slider(
+    InkPalette p, {
+    required String label,
+    required String hint,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required String display,
+    required ValueChanged<double> onChanged,
+    required Future<void> Function() onEnd,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: InkTokens.s3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(label,
+                    style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600)),
               ),
-            ),
+              Text(display,
+                  style: TextStyle(
+                      fontSize: 15.5, fontWeight: FontWeight.w700, color: p.primary)),
+            ],
           ),
-          const SizedBox(height: 24),
-          Center(
-            child: Text(
-              _version.isEmpty
-                  ? '跬步 Onestep · 本地优先，数据在你手中'
-                  : '跬步 Onestep $_version\n本地优先，数据在你手中',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
-            ),
+          Text(hint, style: TextStyle(fontSize: 12.5, color: p.ink3)),
+          Slider(
+            value: value.clamp(min, max),
+            min: min,
+            max: max,
+            divisions: divisions,
+            label: display,
+            onChanged: onChanged,
+            onChangeEnd: (_) => onEnd(),
           ),
         ],
       ),

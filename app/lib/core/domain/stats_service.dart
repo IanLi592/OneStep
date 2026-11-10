@@ -1,3 +1,5 @@
+import 'package:drift/drift.dart';
+
 import '../data/database.dart';
 
 /// 统计数据（近 7 天复习量、卡片状态分布、连续打卡天数、记忆保持率）。
@@ -24,6 +26,16 @@ class StatsService {
       result.add(DailyCount(day: day, count: count));
     }
     return result;
+  }
+
+  /// 今日已作答次数（不含被撤销的）。首页「今日进度环」用它算完成度。
+  Future<int> todayReviewCount() async {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day).millisecondsSinceEpoch;
+    final logs = await (db.select(db.reviewLogs)
+          ..where((l) => l.undone.equals(false) & l.reviewedAt.isBiggerOrEqualValue(start)))
+        .get();
+    return logs.length;
   }
 
   /// 卡片状态分布。

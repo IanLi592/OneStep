@@ -9,7 +9,7 @@
 // 该层不关心具体记录语义，只负责：按账号存记录、按 version 去重合并、
 // 返回某游标之后的所有变更。真正的冲突副本保留在客户端本地。
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 
 let nextIdCounter = 1;
 function genId(prefix) {
@@ -36,8 +36,21 @@ export class SyncStore {
       this.records = new Map(data.records || []);
       this.devices = new Map(data.devices || []);
       nextIdCounter = data.nextIdCounter || 1;
-    } catch {
-      // 损坏则从空开始（生产应有备份策略）。
+    } catch (e) {
+      // 读不动就绝不能"当作空库继续跑"：那样第一次 save() 就会用空状态覆盖掉
+      // 磁盘上唯一的一份数据，事故现场直接消失。先把坏文件改名留证，再从空开始。
+      const bad = `${this.filePath}.corrupt-${Date.now()}`;
+      try {
+        renameSync(this.filePath, bad);
+        console.error(
+          `[onestep-sync] 数据文件损坏，已改名为 ${bad} 保留原件，本次从空库开始。原因: ${e.message}`,
+        );
+      } catch (renameErr) {
+        console.error(
+          `[onestep-sync] 数据文件损坏且无法改名保留（${renameErr.message}），` +
+            `本次从空库开始，原件可能在下一次保存时被覆盖。原因: ${e.message}`,
+        );
+      }
     }
   }
 
@@ -49,7 +62,12 @@ export class SyncStore {
       devices: [...this.devices],
       nextIdCounter,
     };
-    writeFileSync(this.filePath, JSON.stringify(data), 'utf8');
+    // 先写临时文件再原子改名：进程在写的中途被杀掉时，主文件要么是旧的完整
+    // 版本、要么是新的完整版本，绝不会是半截 JSON（半截 JSON 会让下次 _load
+    // 抛异常，于是整库被"从空开始"抹掉）。
+    const tmp = `${this.filePath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(data), 'utf8');
+    renameSync(tmp, this.filePath);
   }
 
   // ---- 账号 ----

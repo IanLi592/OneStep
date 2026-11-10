@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:onestep/core/data/database.dart';
 import 'package:onestep/core/domain/browser_service.dart';
 import 'package:onestep/core/domain/collection_repo.dart';
+import 'package:onestep/core/domain/widget_updater.dart';
 
 /// 集成测试：用内存数据库跑通"建卡 → 复习队列 → 四档作答 → 撤销"闭环，
 /// 验证 Drift 数据层与 FSRS 调度真正联动。
@@ -55,11 +56,156 @@ void main() {
     expect(after.any((d) => d.name == '英语单词'), isTrue);
   });
 
-  test('createDeck 支持同名分组共存', () async {
+  test('同父重名：手动新建被拒，导入路径可复用', () async {
     await repo.createDeck('重复分组');
-    await repo.createDeck('重复分组');
+    // 手动新建走默认 reuseOnConflict=false，必须让用户知道冲突。
+    await expectLater(
+      repo.createDeck('重复分组'),
+      throwsA(isA<DeckNameConflictException>()),
+    );
+    // 导入路径走 true，静默复用，不打断整批。
+    final reused = await repo.createDeck('重复分组', reuseOnConflict: true);
+    expect(reused.name, '重复分组');
     final decks = await repo.allDecks();
-    expect(decks.where((d) => d.name == '重复分组').length, 2);
+    expect(decks.where((d) => d.name == '重复分组').length, 1,
+        reason: '复用不该产生第二个同名组');
+  });
+
+  test('不同父下允许同名分组共存', () async {
+    final a = await repo.createDeck('A组');
+    final b = await repo.createDeck('B组');
+    final leaf1 = await repo.createDeck('算法', parentId: a.id);
+    final leaf2 = await repo.createDeck('算法', parentId: b.id);
+    expect(leaf1.id, isNot(leaf2.id));
+    // 顶层同名仍然互不影响。本文件 setUp 只种子了「默认牌组」1 个组。
+    expect((await repo.allDecks()).length, 5);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 分组层级（最多 5 层）
+  // ---------------------------------------------------------------------------
+
+  group('分组层级', () {
+    test('深度边界：第 5 层可建，第 6 层被拒', () async {
+      var parentId = (await repo.allDecks()).first.id; // 默认牌组 = 第 1 层
+      for (var level = 2; level <= 5; level++) {
+        final created = await repo.createDeck('L$level', parentId: parentId);
+        expect(await repo.deckPathNames(created.id), hasLength(level));
+        parentId = created.id;
+      }
+      await expectLater(
+        repo.createDeck('L6', parentId: parentId),
+        throwsA(isA<DeckDepthException>()),
+      );
+    });
+
+    test('级联删除：删父组连带整棵子树与全部卡片', () async {
+      final root = await repo.createDeck('根');
+      final mid = await repo.createDeck('中', parentId: root.id);
+      final leaf = await repo.createDeck('叶', parentId: mid.id);
+      await repo.createBasicNote(deckId: root.id, front: 'r1', back: 'x');
+      await repo.createBasicNote(deckId: mid.id, front: 'm1', back: 'x');
+      await repo.createBasicNote(deckId: leaf.id, front: 'l1', back: 'x');
+
+      final report = await repo.deleteDeck(root.id);
+      expect(report.decksDeleted, 3);
+      expect(report.childDecksDeleted, 2);
+      expect(report.cardsDeleted, 3);
+
+      final decks = await repo.allDecks();
+      expect(decks.where((d) => d.name == '中'), isEmpty,
+          reason: '子分组绝不能变成孤儿');
+      expect((await repo.deckCounts(leaf.id)).totalCards, 0);
+    });
+
+    test('子树聚合计数：每张卡只算一次', () async {
+      final root = await repo.createDeck('聚合根');
+      final c1 = await repo.createDeck('子1', parentId: root.id);
+      final c2 = await repo.createDeck('子2', parentId: root.id);
+      await repo.createBasicNote(deckId: root.id, front: 'r', back: 'x');
+      await repo.createBasicNote(deckId: c1.id, front: 'a', back: 'x');
+      await repo.createBasicNote(deckId: c2.id, front: 'b', back: 'x');
+
+      final rootCounts = await repo.deckCounts(root.id);
+      expect(rootCounts.totalCards, 3);
+      expect(rootCounts.newCards, 3);
+      expect((await repo.deckCounts(c1.id)).totalCards, 1);
+
+      final tree = await repo.deckTree();
+      final node = tree.firstWhere((n) => n.id == root.id);
+      expect(node.children, hasLength(2));
+      expect(node.counts.totalCards, 3);
+      expect(node.depth, 1);
+      expect(node.children.first.depth, 2);
+    });
+
+    test('父分组复习队列包含子树到期卡', () async {
+      final root = await repo.createDeck('复习根');
+      final child = await repo.createDeck('复习子', parentId: root.id);
+      await repo.createBasicNote(deckId: root.id, front: 'rq', back: 'x');
+      await repo.createBasicNote(deckId: child.id, front: 'cq', back: 'x');
+      expect(await repo.dueCards(root.id), hasLength(2));
+      expect(await repo.dueCards(child.id), hasLength(1));
+    });
+
+    test('小组件待读数不因层级重复计数', () async {
+      final root = await repo.createDeck('组件根');
+      final child = await repo.createDeck('组件子', parentId: root.id);
+      await repo.createBasicNote(deckId: root.id, front: 'r', back: 'x');
+      await repo.createBasicNote(deckId: child.id, front: 'c', back: 'x');
+      // 默认牌组 0 张 + 该子树 2 张 = 2（若按旧写法逐组相加会变成 4）。
+      expect(await WidgetUpdater(repo).totalDue(), 2);
+    });
+
+    test('moveDeck：环检测与"整棵子树搬过去超深"都被拒', () async {
+      final root = await repo.createDeck('移动根');
+      final l2 = await repo.createDeck('M2', parentId: root.id);
+      await repo.createDeck('M3', parentId: l2.id); // root 子树深 3
+
+      await expectLater(repo.moveDeck(root.id, root.id),
+          throwsA(isA<DeckCycleException>()));
+      await expectLater(repo.moveDeck(root.id, l2.id),
+          throwsA(isA<DeckCycleException>()),
+          reason: '挂到自己的后代下会成环');
+
+      // 另一棵树：X(1) -> X2(2) -> X3(3)，把深 3 的子树挂到 X3 下会到第 6 层。
+      final x = await repo.createDeck('X');
+      final x2 = await repo.createDeck('X2', parentId: x.id);
+      final x3 = await repo.createDeck('X3', parentId: x2.id);
+      await expectLater(repo.moveDeck(root.id, x3.id),
+          throwsA(isA<DeckDepthException>()));
+
+      // 合法移动：挂到 X2 下 -> 最深 2+3=5，刚好允许。
+      await repo.moveDeck(root.id, x2.id);
+      final moved = await repo.deckPathNames(l2.id);
+      expect(moved, ['X', 'X2', '移动根', 'M2']);
+    });
+
+    test('孤儿分组按顶层呈现（同步期父还没到）', () async {
+      await db.into(db.decks).insert(DecksCompanion.insert(
+            id: newId(),
+            name: '孤儿',
+            parentId: const Value('不存在的父id'),
+            version: 1,
+          ));
+      final tree = await repo.deckTree();
+      final node = tree.firstWhere((n) => n.name == '孤儿');
+      expect(node.depth, 1, reason: '父不存在的分组必须可见可学，不能凭空消失');
+    });
+
+    test('同级按创建顺序排，改名不会让分组乱跳', () async {
+      final first = await repo.createDeck('zzz先建');
+      final second = await repo.createDeck('aaa后建');
+      // 种子默认牌组最先建，故顺序为 [默认牌组, first, second]。
+      final roots = await repo.allDecks();
+      expect(roots.map((d) => d.id).take(3).toList(),
+          [roots.first.id, first.id, second.id]);
+      expect(roots[1].name, 'zzz先建', reason: '不是按名字码位排（否则 aaa 会提前）');
+
+      await repo.renameDeck(first.id, '改名了');
+      final after = await repo.allDecks();
+      expect(after[1].id, first.id, reason: '改名不该改变位置');
+    });
   });
 
   test('createDeck 建的分组可正常建卡与复习', () async {
@@ -228,6 +374,49 @@ void main() {
     expect(repo2.newCardsPerDay, 55);
     expect(repo2.maxReviewsPerDay, 123);
     expect(repo2.desiredRetention, closeTo(0.85, 0.001));
+  });
+
+  test('同步设置持久化：地址/账号/密钥/游标 重启后仍在', () async {
+    repo.syncServerUrl = 'http://172.31.32.1:8787';
+    repo.syncUsername = 'ian';
+    repo.syncSecret = 'my-secret';
+    repo.syncCursor = 1793582677000;
+    await repo.saveSyncSettings();
+
+    // 用同一个 db 造新 repo（模拟应用重启）。
+    final repo2 = CollectionRepo(db);
+    expect(repo2.syncServerUrl, 'http://127.0.0.1:8787'); // 未加载前仍是默认值
+    await repo2.loadSettings();
+    expect(repo2.syncServerUrl, 'http://172.31.32.1:8787');
+    expect(repo2.syncUsername, 'ian');
+    expect(repo2.syncSecret, 'my-secret');
+    expect(repo2.syncCursor, 1793582677000);
+  });
+
+  test('登录 token 持久化：重启后仍能沿用会话', () async {
+    repo.syncToken = 'tok-abc';
+    repo.syncAccountId = 'acct_1';
+    await repo.saveSyncSettings();
+
+    final repo2 = CollectionRepo(db);
+    expect(repo2.syncToken, isEmpty); // 未加载前不该有
+    await repo2.loadSettings();
+    expect(repo2.syncToken, 'tok-abc');
+    expect(repo2.syncAccountId, 'acct_1');
+  });
+
+  test('两条写入路径互不干扰：saveSettings 不会覆盖已存的同步地址', () async {
+    repo.syncServerUrl = 'http://10.0.0.9:8787';
+    await repo.saveSyncSettings();
+
+    // 模拟设置页滑杆结束只写学习设置。
+    repo.newCardsPerDay = 7;
+    await repo.saveSettings();
+
+    final repo2 = CollectionRepo(db);
+    await repo2.loadSettings();
+    expect(repo2.newCardsPerDay, 7);
+    expect(repo2.syncServerUrl, 'http://10.0.0.9:8787');
   });
 
   // ---------------------------------------------------------------------------

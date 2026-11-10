@@ -14,13 +14,15 @@ class WidgetUpdater {
   final CollectionRepo repo;
   static const _channel = MethodChannel('onestep/widget');
 
-  /// 计算所有牌组今日待复习总数（新卡 + 学习中 + 到期复习）。
+  /// 今日待复习总数（新卡 + 学习中 + 到期复习）。
+  ///
+  /// 层级化后 `deckCounts` 是**子树聚合**口径，逐分组相加会把父与子重复计数
+  /// （小组件数字直接虚高）。这里只累加每棵树的根节点，每张卡恰好算一次。
   Future<int> totalDue() async {
-    final decks = await repo.allDecks();
+    final tree = await repo.deckTree();
     var total = 0;
-    for (final d in decks) {
-      final counts = await repo.deckCounts(d.id);
-      total += counts.total;
+    for (final root in tree) {
+      total += root.counts.total;
     }
     return total;
   }

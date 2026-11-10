@@ -25,6 +25,14 @@ pubspec.lock        # 可选：应用项目通常提交，此处先忽略便于�
 *.sqlite
 backups/
 
+# 同步服务端落盘数据：含账号与同步密钥明文，绝不入库
+server/data/
+
+# 排障期的一次性产物：探针脚本 + 恢复前的库/密钥备份（同样是明文口令）
+# 明确写死，避免任何人 git add -A 把 secret 推进历史
+_sync_probe/
+_sync_recovery_backup/
+
 # 系统
 Thumbs.db
 .DS_Store

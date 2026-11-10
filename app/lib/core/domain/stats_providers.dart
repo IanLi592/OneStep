@@ -34,3 +34,9 @@ final studyStreakProvider = FutureProvider<int>((ref) async {
   final stats = ref.watch(statsServiceProvider);
   return stats.studyStreak();
 });
+
+/// 今日已作答次数（首页今日进度环的分子）。
+final todayReviewCountProvider = FutureProvider<int>((ref) async {
+  final stats = ref.watch(statsServiceProvider);
+  return stats.todayReviewCount();
+});

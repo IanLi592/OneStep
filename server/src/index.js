@@ -10,8 +10,11 @@
 
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { mkdirSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { SyncStore, SyncError } from './store.js';
+import { startupBanner } from './addresses.js';
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -114,13 +117,50 @@ export function createApp({ filePath = null } = {}) {
   return { server, store };
 }
 
+// 默认数据文件：<server 目录>/data/sync.json（.gitignore 已忽略 server/data/）。
+const DEFAULT_SYNC_DB = fileURLToPath(new URL('../data/sync.json', import.meta.url));
+
+/**
+ * 解析同步数据文件路径（纯函数，便于单测）。
+ *
+ * 规则：
+ *   - 没设 ONESTEP_SYNC_DB       -> 用 defaultPath（默认 server/data/sync.json）。
+ *   - 设了相对路径               -> 按当前工作目录解析成绝对路径。
+ *   - 设了 ':memory:' 或 'none'  -> 返回 null，即刻意不落盘（只给测试/临时演示用）。
+ *
+ * 为什么要有默认值（2026-11-03 的真实事故）：原来这里是
+ * `process.env.ONESTEP_SYNC_DB || null`，而 store.js 的 save() 在 filePath 为
+ * null 时第一行就 return。于是照 README 的裸命令 `node src/index.js` 启动时，
+ * 全部账号与同步记录**只活在内存里**：进程一重启就静默清空，不报错也不提示。
+ * 用户看到的现象是"手机登不上电脑上注册的账号，只能重新注册"，而重新注册拿到
+ * 的是一个全新的空账号，"立即同步"自然一条卡片也拉不到——当时服务端里躺着
+ * 990 条记录，全在这次重启里没了。
+ *
+ * @param {Record<string,string|undefined>} env
+ * @param {string} defaultPath
+ * @returns {string|null} 绝对路径，或 null 表示不持久化
+ */
+export function resolveSyncDbPath(env = process.env, defaultPath = DEFAULT_SYNC_DB) {
+  const raw = (env.ONESTEP_SYNC_DB ?? '').trim();
+  if (raw === '') return defaultPath;
+  if (raw === ':memory:' || raw.toLowerCase() === 'none') return null;
+  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+}
+
 // 直接运行时启动（跨平台比较，避免 Windows 反斜杠/盘符导致判断失败）。
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   const port = process.env.PORT ? Number(process.env.PORT) : 8787;
-  const filePath = process.env.ONESTEP_SYNC_DB || null;
+  const filePath = resolveSyncDbPath();
+  // 目录不存在就先建好：否则 store.save() 会在第一次注册/同步时抛 ENOENT，
+  // 被 catch 成 400 返回给客户端，看起来像"客户端请求有问题"。
+  if (filePath) mkdirSync(dirname(filePath), { recursive: true });
   const { server } = createApp({ filePath });
+  // 横幅在 listen 成功后才打：否则端口被占时先打印了"已启动 + 该填的地址"，
+  // 反而把人误导到别的地方去查。
   server.listen(port, () => {
-    console.log(`Onestep sync server on http://localhost:${port}`);
+    for (const line of startupBanner({ port, dataFile: filePath })) {
+      console.log(line);
+    }
   });
 }

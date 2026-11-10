@@ -12,7 +12,8 @@
 - **核心学习闭环**：看问题 → 翻面看答案 → 四档打分（忘记/困难/良好/简单），支持撤销。
 - **FSRS-7 调度算法**：现代、智能的间隔重复，可配置"期望记忆保持率"。（数值已对照官方参考实现验证）
 - **本地优先**：数据全部存本机 SQLite，无需账号、离线可用。
-- **牌组与笔记**：嵌套牌组、笔记类型/字段、标签。
+- **牌组与笔记**：树形嵌套牌组（最深 5 层，父组数字按子树聚合、每张卡只算一次）、
+  笔记类型/字段、标签。
 - **完形填空（Cloze）**：`{{c1::答案}}` 语法，按序号自动生成多张卡片，复习时挖空/揭示。
 - **卡片浏览器**：按文本/标签/状态/牌组搜索过滤，支持挂起与删除。
 - **CSV 导入导出**：备份与迁移，兼容 Excel/Windows 换行。
@@ -35,12 +36,13 @@ Onestep/
 │   │   │   └── sync/       # 同步客户端
 │   │   ├── features/       # 界面：牌组 / 复习 / 添加卡片 / 浏览器 / 统计 / 设置 / 同步
 │   │   └── shared/         # 主题
-│   └── test/               # 单元 + 集成测试（56 项，全部通过）
+│   └── test/               # 单元 + 集成 + 界面测试（174 项通过 / 4 项跳过）
 ├── server/                 # 自建同步服务端（纯 Node，无外部依赖）
-│   ├── src/                # 存储层 + HTTP API
-│   └── test/               # 服务端测试（7 项，全部通过）
+│   ├── src/                # 存储层 + HTTP API + 地址探测
+│   └── test/               # 服务端测试（3 个文件 23 项，全部通过）
 └── docs/
     ├── 需求说明书.md        # 需求文档
+    ├── 层级分组需求说明.md  # 分组树形层级（最深 5 层）需求与实现记录
     └── 本地构建说明.md      # 本机构建/工具链说明（重要）
 ```
 
@@ -68,8 +70,14 @@ flutter build apk --debug  # 构建安卓 APK
 
 ```powershell
 cd server
-node test/store.test.js   # 运行服务端测试（7/7 通过）
-node src/index.js         # 启动 :8787
+npm test                # 服务端测试（3 个文件 23 项，全部通过）
+node src/index.js       # 启动 :8787，默认落盘到 server\data\sync.json
+                        # 想刻意只在内存里跑（测试/演示）：$env:ONESTEP_SYNC_DB=":memory:"
+
+# 推荐用这个：启动的同时打印此刻该在 App 里填的地址，并检查端口占用与防火墙规则。
+# 数据落盘已经不用靠它了——裸命令 node src/index.js 也会默认写 server\data\sync.json。
+powershell -File scripts\sync-server.ps1
+powershell -File scripts\sync-server.ps1 -NoRun   # 只探测地址、不启动
 ```
 
 端点：`POST /register`、`POST /login`、`POST /device`、`POST /sync`。
@@ -79,13 +87,20 @@ node src/index.js         # 启动 :8787
 - **调度**：FSRS-7，纯 Dart 移植，数值与官方 `fsrs-rs` 参考实现一致（见测试断言）。
 - **数据**：Drift（SQLite）。每条记录带 `version`（毫秒时间戳）用于同步的后写胜出(LWW)合并。
 - **同步**：哑终端云(dumb-cloud)模型。客户端本地 SQLite 为准，服务端只做版本去重合并与
-  游标拉取；冲突副本由客户端保留，绝不静默丢数据。
+  游标拉取；冲突副本由客户端保留，绝不静默丢数据。两条不变量：
+  服务端必须落盘（默认 `server\data\sync.json`，纯内存只在显式 `ONESTEP_SYNC_DB=:memory:` 时生效，
+  否则重启即清空账号与记录）；**游标属于账号**——客户端换账号（accountId 变化）时把游标归零整份重推，
+  否则旧游标会让"推送 0 条、应用 0 条"地空转且毫不报错。
 - **合规**：不复制 Anki(AGPL)/AnkiDroid(GPL) 源码，仅借鉴数据模型与交互；FSRS 为 MIT 许可。
 
 ## 已知限制
 
-- Windows 桌面打包需本机安装 Visual Studio C++ 工作负载 + 开启开发者模式（符号链接）。
-- APKG 只读导入尚未实现（计划中）。
+- Windows 桌面打包需本机安装 Visual Studio C++ 工作负载；不能建符号链接时用
+  `mklink /J` 目录 junction 兜底（见 docs/本地构建说明.md 的 [ONESTEP PATCH]）。
+- 分组层级最深 **5 层**，超限时创建/移动都会被拒（不静默截断）。
+- CSV 导出只有 `正面,背面,标签` 三列，**不含牌组与层级**，用它做备份会丢树结构；
+  要保留层级请用 XLSX 导入导出的 `A::B::C` 路径写法。
+- APKG 导入把 Anki 的 `Parent::Child` **拍平**进单个根分组，层级信息目前会丢。
 - 媒体（图片/音频）与 TTS 尚未实现。
 
 ## 许可证
